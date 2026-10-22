@@ -1,0 +1,161 @@
+// ADR 0015: no build of ours compiles against, resolves or downloads a target mod.
+// Applied to every subproject by the root build. Adding an allowlist entry is a reviewed change (Heimdall).
+
+// Classes: INTERNAL (our own artifacts), MODDING (Minecraft modding requirements), GENERIC (general Java utilities).
+// Matching is on the exact Maven group (no prefix patterns).
+ext.allowedGroups = [
+    [group: 'com.mojang', cls: 'modding', why: 'the Minecraft libraries (authlib, brigadier, DFU, logging, ...) and the Minecraft artifacts'],
+    [group: 'net.neoforged', cls: 'modding', why: 'NeoForge, its bus, coremods, DevLaunch, JarJar and NeoForm artifacts'],
+    [group: 'net.neoforged.accesstransformers', cls: 'modding', why: 'NeoForge access transformers (at-modlauncher)'],
+    [group: 'net.neoforged.fancymodloader', cls: 'modding', why: 'FML loader and early display'],
+    [group: 'cpw.mods', cls: 'modding', why: 'modlauncher / securejarhandler / bootstraplauncher, shipped by NeoForge'],
+    [group: 'net.fabricmc', cls: 'modding', why: 'sponge-mixin, the Mixin implementation NeoForge ships'],
+    [group: 'io.github.llamalad7', cls: 'modding', why: 'MixinExtras, shipped by NeoForge'],
+    [group: 'net.minecraftforge', cls: 'modding', why: 'srgutils, a NeoForm/NeoForge toolchain library'],
+    [group: 'net.minecrell', cls: 'modding', why: 'terminalconsoleappender, Minecraft server console'],
+    [group: 'org.ow2.asm', cls: 'modding', why: 'ASM, used by FML/modlauncher and Mixin'],
+    [group: 'org.lwjgl', cls: 'modding', why: 'LWJGL, the Minecraft native bindings'],
+    [group: 'io.netty', cls: 'modding', why: 'Netty, Minecraft networking'],
+    [group: 'it.unimi.dsi', cls: 'modding', why: 'fastutil, Minecraft dependency'],
+    [group: 'org.joml', cls: 'modding', why: 'JOML, Minecraft dependency'],
+    [group: 'ca.weblite', cls: 'modding', why: 'java-objc-bridge, Minecraft dependency'],
+    [group: 'com.github.oshi', cls: 'modding', why: 'oshi-core, Minecraft dependency'],
+    [group: 'net.java.dev.jna', cls: 'modding', why: 'JNA, Minecraft dependency'],
+    [group: 'com.ibm.icu', cls: 'modding', why: 'icu4j, Minecraft dependency'],
+    [group: 'com.machinezoo.noexception', cls: 'modding', why: 'noexception, Minecraft dependency'],
+    [group: 'org.jcraft', cls: 'modding', why: 'jorbis, Minecraft dependency'],
+    [group: 'org.lz4', cls: 'modding', why: 'lz4-java, Minecraft dependency'],
+    [group: 'org.apache.httpcomponents', cls: 'modding', why: 'httpclient/httpcore, Minecraft dependency'],
+    [group: 'org.apache.commons', cls: 'modding', why: 'commons-lang3/-compress, Minecraft dependency'],
+    [group: 'commons-codec', cls: 'modding', why: 'Minecraft dependency'],
+    [group: 'commons-io', cls: 'modding', why: 'Minecraft dependency'],
+    [group: 'commons-logging', cls: 'modding', why: 'Minecraft dependency'],
+    [group: 'org.apache.logging.log4j', cls: 'modding', why: 'Log4j, Minecraft/NeoForge logging'],
+    [group: 'com.google.guava', cls: 'modding', why: 'Guava, Minecraft dependency'],
+    [group: 'com.google.code.gson', cls: 'modding', why: 'Gson, Minecraft dependency'],
+    [group: 'com.google.code.findbugs', cls: 'modding', why: 'jsr305 annotations via Guava/Minecraft'],
+    [group: 'com.google.errorprone', cls: 'modding', why: 'annotations via Guava'],
+    [group: 'com.google.j2objc', cls: 'modding', why: 'annotations via Guava'],
+    [group: 'org.checkerframework', cls: 'modding', why: 'annotations via Guava'],
+    [group: 'org.slf4j', cls: 'modding', why: 'SLF4J, Minecraft logging facade'],
+    [group: 'org.jline', cls: 'modding', why: 'JLine, Minecraft/NeoForge console'],
+    [group: 'net.sf.jopt-simple', cls: 'modding', why: 'jopt-simple, Minecraft launch arguments'],
+    [group: 'net.jodah', cls: 'modding', why: 'typetools, NeoForge event bus'],
+    [group: 'org.antlr', cls: 'modding', why: 'antlr4-runtime, NeoForge/NeoForm dependency'],
+    [group: 'org.openjdk.nashorn', cls: 'modding', why: 'Nashorn, FML coremods'],
+    [group: 'com.electronwill.night-config', cls: 'modding', why: 'NightConfig (core, toml), FML config/metadata parsing'],
+    [group: 'org.apache.maven', cls: 'modding', why: 'maven-artifact, FML version ranges'],
+    [group: 'org.codehaus.plexus', cls: 'modding', why: 'plexus-utils via maven-artifact'],
+    [group: 'org.jetbrains', cls: 'generic', why: 'JetBrains annotations, Minecraft and general Java'],
+    [group: 'org.junit', cls: 'generic', why: 'JUnit BOM (test library)'],
+    [group: 'org.junit.jupiter', cls: 'generic', why: 'JUnit Jupiter (test library)'],
+    [group: 'org.junit.platform', cls: 'generic', why: 'JUnit Platform (test library)'],
+    [group: 'org.opentest4j', cls: 'generic', why: 'JUnit assertion types (test library)'],
+    [group: 'org.apiguardian', cls: 'generic', why: 'API annotations used by JUnit'],
+    [group: 'org.jspecify', cls: 'generic', why: 'nullness annotations used by JUnit'],
+    [group: 'com.tngtech.archunit', cls: 'generic', why: 'ArchUnit (architecture test library)'],
+]
+
+abstract class VerifyNoTargetModsOnClasspath extends DefaultTask {
+    /** Lines: configuration TAB kind(module|file) TAB descriptor TAB group TAB path. */
+    @Input
+    abstract ListProperty<String> getEntries()
+
+    @Input
+    abstract SetProperty<String> getAllowedGroups()
+
+    /** Directories whose files are our own class/resource outputs. */
+    @Input
+    abstract ListProperty<String> getOwnOutputDirs()
+
+    /** Directories where ModDevGradle writes the Minecraft/NeoForge artifacts it supplies. */
+    @Input
+    abstract ListProperty<String> getMdgArtifactDirs()
+
+    @Input
+    abstract Property<String> getProjectPath()
+
+    @TaskAction
+    void verify() {
+        def offenders = new TreeSet<String>()
+        entries.get().each { line ->
+            def (config, kind, descriptor, group, path) = line.split('\t', -1) as List
+            if (kind == 'module') {
+                if (!allowedGroups.get().contains(group)) {
+                    offenders << "${descriptor} (group '${group}' not on the allowlist) in ${projectPath.get()} ${config}".toString()
+                }
+            } else {
+                def inside = { List<String> dirs -> dirs.any { path.startsWith(it) } }
+                if (!inside(ownOutputDirs.get()) && !inside(mdgArtifactDirs.get())) {
+                    offenders << "file ${path} (not our output, not MDG's artifact) in ${projectPath.get()} ${config}".toString()
+                }
+            }
+        }
+        if (offenders) {
+            throw new GradleException("Disallowed dependencies on compile/test classpaths:\n  - " +
+                    offenders.join('\n  - ') +
+                    "\nRule: only internal, Minecraft-modding and generic Java dependencies on compile/test classpaths; ADR 0015. " +
+                    'Target mods must never be build dependencies. To allow a new group, change allowedGroups in gradle/no-target-mods.gradle (reviewed by Heimdall).')
+        }
+    }
+}
+
+def collectEntries = { Configuration cfg ->
+    // Capture the name only: configuration-cache serialisation cannot carry the Configuration itself.
+    String cfgName = cfg.name
+    def modules = cfg.incoming.resolutionResult.rootComponent.map { root ->
+        def seen = new HashSet<Object>()
+        def lines = []
+        def walk
+        walk = { component ->
+            if (!seen.add(component.id)) return
+            def id = component.id
+            if (id instanceof ModuleComponentIdentifier) {
+                lines << [cfgName, 'module', "${id.group}:${id.module}:${id.version}", id.group, ''].join('\t')
+            }
+            component.dependencies.each { dep ->
+                if (dep instanceof ResolvedDependencyResult) walk(dep.selected)
+            }
+        }
+        walk(root)
+        lines
+    }
+    def files = cfg.incoming.artifacts.resolvedArtifacts.map { artifacts ->
+        artifacts.findAll { !(it.id.componentIdentifier instanceof ModuleComponentIdentifier) &&
+                !(it.id.componentIdentifier instanceof ProjectComponentIdentifier) }
+                .collect { [cfgName, 'file', it.id.displayName, '', it.file.absolutePath].join('\t') }
+    }
+    [modules, files]
+}
+
+def verifyTask = tasks.register('verifyNoTargetModsOnClasspath', VerifyNoTargetModsOnClasspath) {
+    group = 'verification'
+    description = 'Fails if any compile/test classpath holds something other than internal, Minecraft-modding or generic Java dependencies (ADR 0015).'
+    allowedGroups.addAll(project.ext.allowedGroups.collect { it.group })
+    projectPath = project.path
+    rootProject.subprojects.each { sub ->
+        ownOutputDirs.add(sub.layout.buildDirectory.dir('classes').get().asFile.absolutePath)
+        ownOutputDirs.add(sub.layout.buildDirectory.dir('resources').get().asFile.absolutePath)
+        mdgArtifactDirs.add(sub.layout.buildDirectory.dir('moddev').get().asFile.absolutePath)
+    }
+}
+
+// Every source set is covered, including ones added later: compile classpath for all, runtime for test-like ones.
+pluginManager.withPlugin('java-library') {
+    sourceSets.configureEach { ss ->
+        def names = [ss.compileClasspathConfigurationName]
+        if (ss.name != 'main') names << ss.runtimeClasspathConfigurationName
+        names.each { n ->
+            verifyTask.configure { t ->
+                def cfg = configurations.getByName(n)
+                // Resolving artifacts may need their producing tasks (MDG's generated Minecraft jars) to have run.
+                t.dependsOn(cfg)
+                def (modules, files) = collectEntries(cfg)
+                t.entries.addAll(modules)
+                t.entries.addAll(files)
+            }
+        }
+    }
+}
+
+tasks.named('check') { dependsOn verifyTask }

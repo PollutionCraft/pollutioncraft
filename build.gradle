@@ -20,4 +20,6 @@ subprojects {
     repositories {
         mavenCentral()
     }
+
+    apply from: rootProject.file('gradle/no-target-mods.gradle')
 }

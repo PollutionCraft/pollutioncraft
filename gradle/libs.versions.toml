@@ -4,8 +4,6 @@ neoforge = "21.1.264"
 parchment-minecraft = "1.21.1"
 parchment-mappings = "2024.11.17"
 junit = "6.1.3"
-# Exact timestamped GTM snapshot build (8.0.0-SNAPSHOT+36a6b38); jar also pinned by SHA-256 (gtceu_sha256).
-gtceu = "8.0.0-20261017.095456-124"
 archunit = "1.5.1"
 
 [libraries]
@@ -13,7 +11,6 @@ junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
-gtceu = { module = "com.gregtechceu.gtceu:gtceu-1.21.1", version.ref = "gtceu" }
 
 [plugins]
 moddev = { id = "net.neoforged.moddev", version.ref = "moddev" }

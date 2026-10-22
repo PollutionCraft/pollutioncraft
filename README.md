@@ -2,7 +2,7 @@
 
 NeoForge 1.21.1 mod that holds Pollution Craft's pollution simulation, its public API and the alpha-only compat adapters. The design lives in the docs repo (`pollution-craft-docs`); `docs/design.md` here is the excerpt engineers build against.
 
-GregTech Modern (GTM, mod id `gtceu`) is an **optional** dependency: the mod loads and passes its tests without it.
+GregTech Modern (GTM, mod id `gtceu`) is an **optional runtime** integration: the mod loads and passes its tests without it, and the build never depends on it.
 
 ## Layout
 
@@ -24,7 +24,7 @@ The repo produces exactly one artifact, `pollutioncraft-1.21.1-<version>.jar` (p
 | --- | --- |
 | Compile, unit tests, architecture checks | `./gradlew build` |
 | Unit tests only | `./gradlew test` |
-| Dev client / dedicated server (with GTM) | `./gradlew runClient` / `./gradlew runServer` |
+| Dev client / dedicated server | `./gradlew runClient` / `./gradlew runServer` |
 | Headless GameTests (no GTM) | `./gradlew runGameTestServer` |
 | Build and install into your dev instance | `./gradlew deployToDevInstance` |
 
@@ -32,16 +32,20 @@ Java 21 is required; Gradle provisions the toolchain automatically. Dedicated-se
 
 ### Architecture checks
 
-Run by `./gradlew build` (ArchUnit, in `mod/src/test`):
+Run by `./gradlew build` (1-4 are ArchUnit tests in `mod/src/test`):
 
 1. **Core purity:** `core` references no Minecraft or loader classes.
 2. **API purity:** `api` references only Minecraft, NeoForge, the JDK and itself.
 3. **Compat isolation:** nothing in `mod` references `compat.*` except `CompatBootstrap`.
 4. **Adapter imports:** `compat.*` classes reference, of our packages, only `api.*` and their own package.
+5. **Dependency allowlist** (Gradle task `verifyNoTargetModsOnClasspath`, not ArchUnit): compile and test classpaths hold only internal, Minecraft-modding and generic Java dependencies; no target mod (ADR 0015). The allowlist of groups is in `gradle/no-target-mods.gradle`; adding a group is a reviewed change.
 
-## GregTech Modern pin
+## Running with target mods
 
-GTM `8.0.0-SNAPSHOT+36a6b38` is pinned to the exact snapshot build `8.0.0-20261017.095456-124` on `maven.gtceu.com`, resolved non-transitively (its jar-in-jar carries ModularUI, Configuration and Registrate). The build fails unless the resolved jar's SHA-256 equals `gtceu_sha256` in `gradle.properties` (task `verifyGtmHash`). It is on the compile classpath and in `runClient`/`runServer`, and absent from `runGameTestServer`.
+No build of ours depends on a target mod such as GTM (ADR 0015): `./gradlew build` and `runGameTestServer` need no GTM and no `maven.gtceu.com`. The pack is the only place GTM is pinned (task 025). To run with GTM, either:
+
+- drop the GTM jar (the pack's pinned version) into `mod/run/client/mods/` or `mod/run/server/mods/` and use `runClient` / `runServer`; FML loads mods from the run's `mods/` folder (a dropped-in GTM loads together with its bundled ModularUI and Configuration); or
+- use `./gradlew deployToDevInstance` and start the Prism pack instance, which already has GTM.
 
 ## Dev instance
 

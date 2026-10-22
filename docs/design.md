@@ -13,7 +13,7 @@ Status: excerpts as of 2026-10-22. Items marked **PENDING** are open questions w
 | Java | 21 (Gradle toolchain) |
 | Gradle tooling | ModDevGradle (MDG), not ForgeGradle |
 | Mappings | Official Mojang names + Parchment for 1.21.1 |
-| GTM | GregTech CEu Modern `8.0.0-SNAPSHOT+20261017-095459-36a6b38`, mod id `gtceu`, pinned by exact build **and hash**. Never `latest-1.21`. |
+| GTM | GregTech CEu Modern, mod id `gtceu`. A **runtime-only** optional target: never a build dependency of ours (ADR 0015). The only GTM pin (exact build and hash) is the pack's (task 025). |
 | Artifact | `pollutioncraft-1.21.1` (one artifact for the whole repo) |
 | Mod id | `pollutioncraft` (provisional) |
 | Mixins | none in task 001 |
@@ -50,6 +50,7 @@ This repo is the core-mod repo. Three Gradle subprojects, bundled into **one** j
 - Version-sensitive targets carry a version gate (GTM: the 8.0.0 snapshot line; task 012).
 - An adapter that throws is disabled for the session and logged; it never crashes the server.
 - GTM is declared **optional** in mod metadata: core must load without GTM.
+- **No target mod is a build dependency** (ADR 0015, accepted): see §10.
 
 ## 5. Conventions (architecture §4)
 
@@ -67,7 +68,7 @@ This repo is the core-mod repo. Three Gradle subprojects, bundled into **one** j
 - **Compat entry point:** `<base>.mod.CompatBootstrap` is the only `mod` class allowed to reference `<base>.compat.*` (check 3). It is not created in task 001 (no adapters yet); task 012 creates it.
 - **Architecture checks:** ArchUnit (JUnit 5) tests in `mod/src/test/java/<base>/architecture/`, run by `mod:test` (so by `build`).
 - **GameTests:** live in a `gametest` source set of `mod` (`mod/src/gametest/`), added to the mod for runs only, never packaged into the jar. Namespace `pollutioncraft`.
-- **GTM in runs:** on `mod`'s compile classpath; present in `runClient`/`runServer`; **absent** from `runGameTestServer`, which proves core loads without it. A GTM-present GameTest run arrives with task 012.
+- **GTM in runs:** never on any classpath. `runGameTestServer` runs without GTM. For dev runs with GTM, put the pack's GTM jar in `mod/run/<side>/mods/` or use `deployToDevInstance` (ADR 0015). The with-targets GameTest job is task 012.
 - **Licences:** `LICENSE` = LGPL-3.0 text, `COPYING` = GPL-3.0 text; both also copied into the jar's `META-INF/`. SPDX id in metadata (and any `SPDX-License-Identifier` headers): **`LGPL-3.0-only`** (ADR 0014, refines ADR 0009; user confirmation pending).
 - **CI:** GitHub Actions pinned to full commit SHAs; `permissions: contents: read`.
 
@@ -94,4 +95,13 @@ This repo is the core-mod repo. Three Gradle subprojects, bundled into **one** j
 - **Rule 2 is a whitelist.** `<base>.api.*` may depend only on the JDK (`java..`, `javax..`), Minecraft (`net.minecraft..`, `com.mojang..`), NeoForge (`net.neoforged..`), `<base>.api..`, and these libraries that Minecraft/NeoForge expose: Guava, Gson, fastutil, JOML, SLF4J, Log4j, JetBrains annotations, Netty (`EXPOSED_LIBRARIES` in `ArchitectureRules`). Adding a library is an API decision and goes through Heimdall.
 - **Rule 4 "own package"** = `<base>.compat.<modid>` and its subpackages; sibling adapters may not reference each other.
 - **Test-only stand-in `net.minecraft.world.level.Level`** in `mod/src/test` (Minecraft is not on `mod:test`'s classpath because of an SLF4J strict-version clash with ArchUnit). Whoever first puts Minecraft on `mod:test`'s classpath deletes the stand-in in the same change.
-- **GTM pin bump** touches two places: the catalog version and the ivy pattern folder in `mod/build.gradle`.
+- ~~GTM pin bump~~: superseded by ADR 0015; the build has no GTM pin.
+
+## 10. ADR 0015 (accepted 2026-10-22): no build-time dependency on target mods
+
+- **No build of ours compiles against, resolves or downloads a target mod** (GTM, Mekanism, AE2, the gap-filler as seen from compat, …). This applies in every repo.
+- **Allowed build dependencies, the only ones:** (1) internal: our own subprojects and artifacts; (2) Minecraft modding requirements: Minecraft, NeoForge/FML, ModDevGradle, Parchment, and libraries NeoForge ships (Mixin, MixinExtras); (3) generic Java utilities, including test libraries.
+- **Enforcement:** the Gradle task `verifyNoTargetModsOnClasspath`, run by `build`, checks every compile and test classpath against an explicit allowlist of groups. Adding a group is a reviewed change (Heimdall).
+- Integrations reach target mods only at runtime, via the integration ladder: data mapping, then observe-only string-targeted Mixin, then other NeoForge-typed signals, then reflection as a last resort. The Mixin, reflection and `…compat.common` rules arrive with task 012.
+- CI may download the pack's pinned target jars as test input for the with-targets GameTest job (task 012). `./gradlew build` never needs them.
+
