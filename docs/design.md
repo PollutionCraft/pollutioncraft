@@ -88,3 +88,10 @@ This repo is the core-mod repo. Three Gradle subprojects, bundled into **one** j
 - `./gradlew runGameTestServer` — headless GameTests
 - `./gradlew deployToDevInstance` — verified by hand, not in CI
 - CI: `./gradlew build runGameTestServer` on every push and pull request
+
+## 9. Decisions recorded during task 001 review (Heimdall)
+
+- **Rule 2 is a whitelist.** `<base>.api.*` may depend only on the JDK (`java..`, `javax..`), Minecraft (`net.minecraft..`, `com.mojang..`), NeoForge (`net.neoforged..`), `<base>.api..`, and these libraries that Minecraft/NeoForge expose: Guava, Gson, fastutil, JOML, SLF4J, Log4j, JetBrains annotations, Netty (`EXPOSED_LIBRARIES` in `ArchitectureRules`). Adding a library is an API decision and goes through Heimdall.
+- **Rule 4 "own package"** = `<base>.compat.<modid>` and its subpackages; sibling adapters may not reference each other.
+- **Test-only stand-in `net.minecraft.world.level.Level`** in `mod/src/test` (Minecraft is not on `mod:test`'s classpath because of an SLF4J strict-version clash with ArchUnit). Whoever first puts Minecraft on `mod:test`'s classpath deletes the stand-in in the same change.
+- **GTM pin bump** touches two places: the catalog version and the ivy pattern folder in `mod/build.gradle`.
