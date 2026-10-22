@@ -1,0 +1,250 @@
+import java.security.MessageDigest
+
+plugins {
+    alias(libs.plugins.moddev)
+}
+
+base {
+    archivesName = providers.gradleProperty('archives_base_name')
+}
+
+def coreMain = project(':core').sourceSets.main
+def apiMain = project(':api').sourceSets.main
+
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+configurations {
+    // GTM for client/server dev runs only: never bundled, never on the GameTest run (design §6).
+    gtmRuntime {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+    gametestImplementation.extendsFrom implementation
+    gametestRuntimeOnly.extendsFrom runtimeOnly
+}
+
+sourceSets.main.runtimeClasspath += configurations.gtmRuntime
+
+repositories {
+    // Exact timestamped snapshot, not the floating 8.0.0-SNAPSHOT. GTM's jar-in-jar already carries
+    // its own dependencies (ModularUI, Configuration, Registrate), so it is resolved non-transitively.
+    exclusiveContent {
+        forRepository {
+            ivy {
+                name = 'GTCEu'
+                url = 'https://maven.gtceu.com'
+                patternLayout {
+                    artifact 'com/gregtechceu/gtceu/[module]/8.0.0-SNAPSHOT/[module]-[revision](-[classifier]).[ext]'
+                }
+                metadataSources { artifact() }
+            }
+        }
+        filter { includeGroup 'com.gregtechceu.gtceu' }
+    }
+}
+
+neoForge {
+    version = libs.versions.neoforge.get()
+    addModdingDependenciesTo sourceSets.gametest
+
+    parchment {
+        minecraftVersion = libs.versions.parchment.minecraft.get()
+        mappingsVersion = libs.versions.parchment.mappings.get()
+    }
+
+    mods {
+        pollutioncraft {
+            sourceSet sourceSets.main
+            sourceSet coreMain
+            sourceSet apiMain
+            sourceSet sourceSets.gametest
+        }
+    }
+
+    runs {
+        client {
+            client()
+            gameDirectory = layout.projectDirectory.dir('run/client')
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'pollutioncraft'
+        }
+        server {
+            server()
+            gameDirectory = layout.projectDirectory.dir('run/server')
+            programArgument '--nogui'
+        }
+        gameTestServer {
+            type = 'gameTestServer'
+            sourceSet = sourceSets.gametest
+            gameDirectory = layout.projectDirectory.dir('run/gametest')
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'pollutioncraft'
+        }
+    }
+}
+
+def gtmDependency = libs.gtceu.get().with { "${it.group}:${it.name}:${it.version}" }
+
+dependencies {
+    // Class directories, not jars: core/api never become published outputs (one-artifact rule).
+    implementation coreMain.output
+    implementation apiMain.output
+
+    gtmRuntime gtmDependency
+    compileOnly gtmDependency
+
+    testImplementation platform(libs.junit.bom)
+    testImplementation libs.junit.jupiter
+    testImplementation libs.archunit.junit5
+    testRuntimeOnly libs.junit.platform.launcher
+}
+
+// ---- GTM pin: fail unless the resolved jar matches the recorded SHA-256 -------------------------
+def gtmJarConfig = configurations.create('gtmJarOnly') {
+    canBeConsumed = false
+    canBeResolved = true
+    transitive = false
+}
+dependencies {
+    gtmJarOnly gtmDependency
+}
+
+abstract class VerifyGtmHash extends DefaultTask {
+    @InputFiles
+    abstract ConfigurableFileCollection getJars()
+
+    @Input
+    abstract Property<String> getExpectedSha256()
+
+    @TaskAction
+    void verify() {
+        def jar = jars.singleFile
+        def md = MessageDigest.getInstance('SHA-256')
+        jar.withInputStream { s ->
+            byte[] buf = new byte[65536]
+            int n
+            while ((n = s.read(buf)) > 0) md.update(buf, 0, n)
+        }
+        def actual = md.digest().encodeHex().toString()
+        if (actual != expectedSha256.get().toLowerCase()) {
+            throw new GradleException("GTM jar ${jar.name} has SHA-256 ${actual}, expected ${expectedSha256.get()} " +
+                    "(gtceu_sha256 in gradle.properties). Refusing to build against an unpinned GTM.")
+        }
+    }
+}
+
+def verifyGtmHash = tasks.register('verifyGtmHash', VerifyGtmHash) {
+    group = 'verification'
+    description = 'Fails if the resolved GTM jar differs from the pinned SHA-256.'
+    jars.from(gtmJarConfig)
+    expectedSha256 = providers.gradleProperty('gtceu_sha256')
+}
+
+tasks.named('compileJava') { dependsOn verifyGtmHash }
+tasks.named('check') { dependsOn verifyGtmHash }
+
+// ---- Single jar ---------------------------------------------------------------------------------
+def licenseFiles = layout.settingsDirectory.files('LICENSE', 'COPYING')
+
+tasks.named('jar', Jar) {
+    from coreMain.output
+    from apiMain.output
+    into('META-INF') { from licenseFiles }
+}
+
+java {
+    withSourcesJar()
+}
+
+tasks.named('sourcesJar', Jar) {
+    from coreMain.allSource
+    from apiMain.allSource
+    into('META-INF') { from licenseFiles }
+}
+
+def modProps = [
+        mod_id: providers.gradleProperty('mod_id').get(),
+        mod_name: providers.gradleProperty('mod_name').get(),
+        mod_version: project.version.toString(),
+        mod_license: providers.gradleProperty('mod_license').get(),
+        mod_authors: providers.gradleProperty('mod_authors').get(),
+        mod_description: providers.gradleProperty('mod_description').get(),
+        minecraft_version_range: providers.gradleProperty('minecraft_version_range').get(),
+        neo_version_range: providers.gradleProperty('neo_version_range').get(),
+        loader_version_range: providers.gradleProperty('loader_version_range').get(),
+]
+
+tasks.named('processResources', ProcessResources) {
+    inputs.properties(modProps)
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand(modProps)
+    }
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat = 'full'
+    }
+}
+
+// ---- Dev loop: deploy into a local Prism instance (design §7) -----------------------------------
+abstract class DeployToDevInstance extends DefaultTask {
+    @InputFile
+    abstract RegularFileProperty getJar()
+
+    @Input
+    @Optional
+    abstract Property<String> getInstance()
+
+    @TaskAction
+    void deploy() {
+        if (!instance.present || instance.get().isBlank()) {
+            throw new GradleException('No dev instance configured. Set Gradle property pollutioncraft.devInstance ' +
+                    '(in ~/.gradle/gradle.properties) or env var POLLUTIONCRAFT_DEV_INSTANCE to your Prism instance ' +
+                    'directory. See README.md, section "Dev instance".')
+        }
+        def mods = new File(instance.get(), 'mods')
+        if (!mods.isDirectory()) {
+            throw new GradleException("Dev instance has no mods directory: ${mods}. " +
+                    'Check pollutioncraft.devInstance / POLLUTIONCRAFT_DEV_INSTANCE. See README.md, section "Dev instance".')
+        }
+        def stale = mods.listFiles({ File f -> f.name.startsWith('pollutioncraft-') && f.name.endsWith('.jar') } as FileFilter)
+        def locked = stale.findAll { !it.delete() }
+        if (locked) {
+            throw new GradleException("Could not delete old jar(s): ${locked*.name.join(', ')} in ${mods}. " +
+                    'Close the game/Prism instance and retry; refusing to leave two versions in mods/.')
+        }
+        def target = new File(mods, jar.get().asFile.name)
+        jar.get().asFile.withInputStream { i -> target.withOutputStream { o -> o << i } }
+        logger.lifecycle("Deployed ${target}")
+    }
+}
+
+tasks.register('deployToDevInstance', DeployToDevInstance) {
+    group = 'pollutioncraft'
+    description = 'Builds the jar and copies it into the local dev Prism instance.'
+    jar = tasks.named('jar', Jar).flatMap { it.archiveFile }
+    instance = providers.gradleProperty('pollutioncraft.devInstance')
+            .orElse(providers.environmentVariable('POLLUTIONCRAFT_DEV_INSTANCE'))
+    outputs.upToDateWhen { false }
+}
+
+// ---- GameTest run must prove its tests ran ------------------------------------------------------
+// The vanilla server exits 0 when it crashes on startup (e.g. "No test functions were given!"), so the
+// run is only accepted if its log shows the required tests passed. Test failures already exit non-zero.
+def gameTestLog = layout.projectDirectory.file('run/gametest/logs/latest.log').asFile
+
+tasks.named('runGameTestServer') {
+    doFirst { gameTestLog.delete() }
+    doLast {
+        if (!gameTestLog.isFile() || !gameTestLog.text.contains('required tests passed')) {
+            throw new GradleException("runGameTestServer exited normally but never reported 'required tests passed' " +
+                    "(startup crash or no tests ran). See ${gameTestLog}.")
+        }
+    }
+}

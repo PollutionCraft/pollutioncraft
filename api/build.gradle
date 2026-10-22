@@ -1,0 +1,17 @@
+plugins {
+    alias(libs.plugins.moddev)
+}
+
+neoForge {
+    version = libs.versions.neoforge.get()
+
+    parchment {
+        minecraftVersion = libs.versions.parchment.minecraft.get()
+        mappingsVersion = libs.versions.parchment.mappings.get()
+    }
+}
+
+// Emit package-info.class so the contract statement ships in the jar.
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs << '-Xpkginfo:always'
+}
