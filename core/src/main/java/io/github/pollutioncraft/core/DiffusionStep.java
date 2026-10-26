@@ -1,6 +1,5 @@
 package io.github.pollutioncraft.core;
 
-import java.util.Map;
 import java.util.function.LongToDoubleFunction;
 
 /**
@@ -14,7 +13,7 @@ public final class DiffusionStep {
     /** See {@link DiffusionJob#start} for the parameter contract. */
     public static void run(
             PollutionField field,
-            Map<Long, Double> emissions,
+            DrainedEmissions emissions,
             LongToDoubleFunction absorptionCapacity,
             DiffusionConfig config) {
         DiffusionJob job = DiffusionJob.start(field, emissions, absorptionCapacity, config);

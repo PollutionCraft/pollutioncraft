@@ -2,10 +2,10 @@ package io.github.pollutioncraft.gametest;
 
 import io.github.pollutioncraft.core.ChunkKey;
 import io.github.pollutioncraft.core.DiffusionStep;
+import io.github.pollutioncraft.core.DrainedEmissions;
 import io.github.pollutioncraft.core.PollutionField;
 import io.github.pollutioncraft.mod.PollutionCraftMod;
 import io.github.pollutioncraft.mod.config.ServerConfig;
-import java.util.Map;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.neoforged.neoforge.gametest.GameTestHolder;
@@ -24,7 +24,7 @@ public final class ConfigOverrideGameTests {
     private static double eastNeighbourAfterOneInterval(ServerConfig config) {
         PollutionField field = new PollutionField();
         field.getOrCreate(ORIGIN).absorbable = 1000;
-        DiffusionStep.run(field, Map.of(), key -> 0, config.diffusionConfig());
+        DiffusionStep.run(field, DrainedEmissions.NONE, key -> 0, config.diffusionConfig());
         return field.get(EAST).local();
     }
 

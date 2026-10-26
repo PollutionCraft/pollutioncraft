@@ -1,7 +1,6 @@
 package io.github.pollutioncraft.core;
 
 import java.util.Arrays;
-import java.util.Map;
 import java.util.function.LongToDoubleFunction;
 
 /**
@@ -25,6 +24,8 @@ public final class DiffusionJob {
     private final double[] absorbable;
     private final double[] persistent;
     private final double[] emitted;
+    private final long[] dominantPos;
+    private final double[] dominantRate;
     private final boolean[] spreads;
 
     private final double[] newAbsorbable;
@@ -34,7 +35,7 @@ public final class DiffusionJob {
 
     private DiffusionJob(
             PollutionField field,
-            Map<Long, Double> emissions,
+            DrainedEmissions emissions,
             LongToDoubleFunction absorptionCapacity,
             DiffusionConfig config) {
         this.field = field;
@@ -47,7 +48,7 @@ public final class DiffusionJob {
         long[] extraKeys = new long[base.length * 4];
         for (int i = 0; i < base.length; i++) {
             ChunkPollution c = field.get(base[i]);
-            double local = (c == null ? 0 : c.absorbable + c.persistent) + emissions.getOrDefault(base[i], 0.0);
+            double local = (c == null ? 0 : c.absorbable + c.persistent) + emissions.chunkTotal(base[i]);
             baseSpreads[i] = spreads(local, config);
             if (baseSpreads[i]) {
                 for (long n : neighbours(base[i])) {
@@ -63,11 +64,15 @@ public final class DiffusionJob {
         absorbable = new double[n];
         persistent = new double[n];
         emitted = new double[n];
+        dominantPos = new long[n];
+        dominantRate = new double[n];
         spreads = new boolean[n];
         for (int i = 0; i < n; i++) {
             ChunkPollution c = field.get(keys[i]);
-            double e = emissions.getOrDefault(keys[i], 0.0);
+            double e = emissions.chunkTotal(keys[i]);
             emitted[i] = e;
+            dominantPos[i] = emissions.dominantPos(keys[i]);
+            dominantRate[i] = emissions.dominantRate(keys[i]);
             absorbable[i] = (c == null ? 0 : c.absorbable) + e; // emissions land in the absorbable pool
             persistent[i] = c == null ? 0 : c.persistent;
             spreads[i] = spreads(absorbable[i] + persistent[i], config);
@@ -78,24 +83,19 @@ public final class DiffusionJob {
     }
 
     /**
-     * Snapshots {@code field} plus {@code emissions}.
+     * Snapshots {@code field} plus {@code emissions}. The emissions are already validated (finite, {@code >= 0})
+     * by the {@link EmissionBuffer} that produced them.
      *
-     * @param emissions pending emissions this interval by chunk key; each finite and {@code >= 0}
+     * @param emissions what the buffer drained for this interval
      * @param absorptionCapacity per-chunk absorption capacity; asked only for chunks that hold absorbable
      *     pollution, and must be finite and {@code >= 0} (else {@link IllegalArgumentException} from
      *     {@link #advance}, before the field is modified)
      */
     public static DiffusionJob start(
             PollutionField field,
-            Map<Long, Double> emissions,
+            DrainedEmissions emissions,
             LongToDoubleFunction absorptionCapacity,
             DiffusionConfig config) {
-        for (Map.Entry<Long, Double> e : emissions.entrySet()) {
-            double amount = e.getValue();
-            if (!(amount >= 0) || Double.isInfinite(amount)) {
-                throw new IllegalArgumentException("emission must be finite and >= 0, was " + amount);
-            }
-        }
         return new DiffusionJob(field, emissions, absorptionCapacity, config);
     }
 
@@ -161,7 +161,11 @@ public final class DiffusionJob {
         stats[i] = new ChunkIntervalStats(spreadIn, spreadOut, absorbed, decayed);
     }
 
-    /** Writes the computed state into the field, pruning chunks below {@code epsilon}. */
+    /**
+     * Writes the computed state into the field, pruning chunks below {@code epsilon}. Every surviving chunk
+     * gets this interval's {@code emittedLastInterval} and dominant source in the same pass; a chunk that
+     * emitted nothing gets 0 and no dominant source.
+     */
     public void apply() {
         if (!isComputed()) {
             throw new IllegalStateException("apply() before every chunk was computed");
@@ -176,18 +180,15 @@ public final class DiffusionJob {
             c.absorbable = newAbsorbable[i];
             c.persistent = newPersistent[i];
             c.emittedLastInterval = emitted[i];
+            c.dominantSourcePos = dominantPos[i];
+            c.dominantSourceRate = dominantRate[i];
             c.lastIntervalStats = stats[i];
         }
     }
 
-    private static long[] candidateKeys(PollutionField field, Map<Long, Double> emissions) {
-        long[] stored = field.sortedKeys();
-        long[] emitting = new long[emissions.size()];
-        int i = 0;
-        for (long key : emissions.keySet()) {
-            emitting[i++] = key;
-        }
-        return merge(stored, emitting, emitting.length);
+    private static long[] candidateKeys(PollutionField field, DrainedEmissions emissions) {
+        long[] emitting = emissions.chunkKeys();
+        return merge(field.sortedKeys(), emitting, emitting.length);
     }
 
     /** Sorted union of {@code sortedBase} and {@code extra[0, extraCount)}, without duplicates. */

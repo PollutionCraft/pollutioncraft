@@ -67,6 +67,10 @@ public final class ServerConfig {
         return effective(ConfigRegistry.DEFAULT_CAPACITY);
     }
 
+    public int maxEmittersPerChunk() {
+        return (int) effective(ConfigRegistry.MAX_EMITTERS_PER_CHUNK);
+    }
+
     /** The diffusion parameters for the next interval, from the effective values. */
     public DiffusionConfig diffusionConfig() {
         return new DiffusionConfig(spreadFraction(), spreadThreshold(), persistentDecay(), epsilon());
