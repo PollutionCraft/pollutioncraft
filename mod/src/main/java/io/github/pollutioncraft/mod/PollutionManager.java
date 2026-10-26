@@ -4,6 +4,7 @@ import io.github.pollutioncraft.api.PollutionApi;
 import io.github.pollutioncraft.core.ChunkKey;
 import io.github.pollutioncraft.core.ChunkPollution;
 import io.github.pollutioncraft.core.SimulationGate;
+import io.github.pollutioncraft.mod.emitter.EmitterEngine;
 import java.nio.file.Path;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -87,7 +88,7 @@ public final class PollutionManager {
 
     /**
      * Runs {@code n} whole intervals in {@code level} now (entry point for the debug command, task 009).
-     * Returns why nothing ran when the world record or this dimension's field is paused (unreadable).
+     * Does not run the emitter engine: it drains only what is already buffered. Returns why nothing ran when the world record or this dimension's field is paused (unreadable).
      */
     public static StepResult stepNow(ServerLevel level, int n) {
         DimensionPollution dimension = dimension(level);
@@ -112,6 +113,8 @@ public final class PollutionManager {
             return;
         }
         try {
+            // Mapped blocks emit on the tick an interval starts, so the scheduler drains them into that interval.
+            EmitterEngine.global().tick(level, !dimension.scheduler().inFlight());
             // Absorption is stubbed to zero until P2 (task 013).
             if (dimension.scheduler().tick(dimension.field(), key -> 0.0, committed -> countCommitted(world, committed))) {
                 dimension.setDirty();

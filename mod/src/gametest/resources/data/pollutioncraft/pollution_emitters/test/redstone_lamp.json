@@ -1,0 +1,5 @@
+{
+  "block": "minecraft:redstone_lamp",
+  "rate": 2.0,
+  "active_when": { "property": "lit", "value": "true" }
+}
