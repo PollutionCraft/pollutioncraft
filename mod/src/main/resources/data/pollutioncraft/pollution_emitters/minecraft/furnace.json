@@ -1,0 +1,5 @@
+{
+  "block": "minecraft:furnace",
+  "rate": 1.0,
+  "active_when": { "property": "lit", "value": "true" }
+}
