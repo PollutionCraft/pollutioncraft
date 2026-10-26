@@ -3,6 +3,7 @@ package io.github.pollutioncraft.gametest;
 import io.github.pollutioncraft.core.ChunkKey;
 import io.github.pollutioncraft.core.ChunkPollution;
 import io.github.pollutioncraft.mod.DimensionPollution;
+import io.github.pollutioncraft.mod.PollutionCraftMod;
 import io.github.pollutioncraft.mod.PollutionManager;
 import io.github.pollutioncraft.mod.WorldPollution;
 import java.io.ByteArrayInputStream;
@@ -42,7 +43,7 @@ public final class PollutionSimulationGameTests {
     }
 
     private static void tickIntervals(MinecraftServer server, int onlinePlayers, int intervals) {
-        for (int i = 0; i < intervals * PollutionManager.DEFAULTS.spreadIntervalTicks(); i++) {
+        for (int i = 0; i < intervals * PollutionCraftMod.config().spreadIntervalTicks(); i++) {
             PollutionManager.tick(server, onlinePlayers);
         }
     }
@@ -82,9 +83,41 @@ public final class PollutionSimulationGameTests {
         helper.assertTrue(
                 PollutionManager.api().getLocal(level, 60_001, 60_000) == east.local(), "API read must match the field");
         helper.assertTrue(
-                PollutionManager.world(server).record().activeTicks() == activeBefore + PollutionManager.DEFAULTS.spreadIntervalTicks(),
+                PollutionManager.world(server).record().activeTicks() == activeBefore + PollutionCraftMod.config().spreadIntervalTicks(),
                 "activeTicks must advance once per tick with a player online");
         helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void configOverrideSetMidIntervalAppliesFromTheNextInterval(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        DimensionPollution dimension = PollutionManager.dimension(level);
+        PollutionCraftMod.config().overrides().clearAll();
+        try {
+            dimension.scheduler().abandon();
+            clearAround(dimension, 80_000, 80_000);
+            dimension.field().getOrCreate(ChunkKey.pack(80_000, 80_000)).absorbable = 100.0;
+            int interval = PollutionCraftMod.config().spreadIntervalTicks();
+            double baseline = PollutionCraftMod.config().spreadFraction();
+
+            for (int i = 0; i < interval / 2; i++) {
+                PollutionManager.tick(server, 1);
+            }
+            helper.assertTrue(PollutionCraftMod.config().overrides().set("spreadFraction", 0.1).isEmpty(), "override refused");
+            for (int i = interval / 2; i < interval; i++) {
+                PollutionManager.tick(server, 1);
+            }
+            double afterFirst = dimension.field().get(ChunkKey.pack(80_001, 80_000)).absorbable;
+            helper.assertTrue(afterFirst == 100.0 * baseline, "the running interval must keep the old fraction, got " + afterFirst);
+
+            tickIntervals(server, 1, 1);
+            double gained = dimension.field().get(ChunkKey.pack(80_001, 80_000)).absorbable - afterFirst;
+            helper.assertTrue(gained > 5.0, "the next interval must use the overridden fraction, gained " + gained);
+            helper.succeed();
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+        }
     }
 
     @GameTest(template = EMPTY_TEMPLATE)

@@ -23,8 +23,6 @@ import org.slf4j.LoggerFactory;
  */
 @EventBusSubscriber(modid = PollutionCraftMod.MOD_ID)
 public final class PollutionManager {
-    public static final PollutionDefaults DEFAULTS = PollutionDefaults.standard();
-
     private static final Logger LOGGER = LoggerFactory.getLogger(PollutionManager.class);
     private static final PollutionApi API = new PollutionApiImpl();
 

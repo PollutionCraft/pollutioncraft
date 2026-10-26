@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.util.Map;
 import java.util.Random;
 import java.util.function.LongToDoubleFunction;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class IntervalSchedulerTest {
@@ -39,7 +40,7 @@ class IntervalSchedulerTest {
     void slicedIntervalEqualsTheSinglePassStep() {
         PollutionField sliced = seeded(1);
         PollutionField single = seeded(1);
-        IntervalScheduler scheduler = new IntervalScheduler(20, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(20, CONFIG));
 
         for (int tick = 0; tick < 20; tick++) {
             scheduler.tick(sliced, NO_EMISSIONS, CAPACITY);
@@ -53,7 +54,7 @@ class IntervalSchedulerTest {
     void deltasAreAppliedOnlyAtTheEndOfTheInterval() {
         PollutionField field = seeded(2);
         PollutionField untouched = seeded(2);
-        IntervalScheduler scheduler = new IntervalScheduler(20, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(20, CONFIG));
 
         for (int tick = 0; tick < 19; tick++) {
             scheduler.tick(field, NO_EMISSIONS, CAPACITY);
@@ -68,7 +69,7 @@ class IntervalSchedulerTest {
     void severalIntervalsEqualRepeatedSinglePasses() {
         PollutionField sliced = seeded(3);
         PollutionField single = seeded(3);
-        IntervalScheduler scheduler = new IntervalScheduler(7, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(7, CONFIG));
 
         for (int tick = 0; tick < 7 * 4; tick++) {
             scheduler.tick(sliced, NO_EMISSIONS, CAPACITY);
@@ -84,7 +85,7 @@ class IntervalSchedulerTest {
     void intervalOfOneTickStepsEveryTick() {
         PollutionField a = seeded(4);
         PollutionField b = seeded(4);
-        IntervalScheduler scheduler = new IntervalScheduler(1, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(1, CONFIG));
 
         scheduler.tick(a, NO_EMISSIONS, CAPACITY);
         DiffusionStep.run(b, NO_EMISSIONS, CAPACITY, CONFIG);
@@ -96,7 +97,7 @@ class IntervalSchedulerTest {
     void stepNowRunsTheSameCodePathSynchronously() {
         PollutionField now = seeded(5);
         PollutionField single = seeded(5);
-        IntervalScheduler scheduler = new IntervalScheduler(20, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(20, CONFIG));
 
         scheduler.stepNow(now, NO_EMISSIONS, CAPACITY, 3);
         for (int i = 0; i < 3; i++) {
@@ -110,7 +111,7 @@ class IntervalSchedulerTest {
     void stepNowFinishesAnInFlightIntervalFirst() {
         PollutionField now = seeded(6);
         PollutionField single = seeded(6);
-        IntervalScheduler scheduler = new IntervalScheduler(20, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(20, CONFIG));
         for (int tick = 0; tick < 5; tick++) {
             scheduler.tick(now, NO_EMISSIONS, CAPACITY);
         }
@@ -125,7 +126,7 @@ class IntervalSchedulerTest {
     @Test
     void tickReportsTrueOnlyWhenAnIntervalWasApplied() {
         PollutionField field = seeded(8);
-        IntervalScheduler scheduler = new IntervalScheduler(5, CONFIG);
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(5, CONFIG));
 
         for (int tick = 1; tick <= 10; tick++) {
             boolean applied = scheduler.tick(field, NO_EMISSIONS, CAPACITY);
@@ -134,9 +135,34 @@ class IntervalSchedulerTest {
     }
 
     @Test
+    void settingsChangedMidIntervalApplyFromTheNextInterval() {
+        AtomicReference<IntervalScheduler.Settings> current =
+                new AtomicReference<>(new IntervalScheduler.Settings(5, CONFIG));
+        IntervalScheduler scheduler = new IntervalScheduler(current::get);
+        PollutionField field = seeded(9);
+        PollutionField expected = seeded(9);
+        DiffusionStep.run(expected, NO_EMISSIONS, CAPACITY, CONFIG);
+
+        scheduler.tick(field, NO_EMISSIONS, CAPACITY);
+        current.set(new IntervalScheduler.Settings(3, new DiffusionConfig(0.2, 1.0, 0.0, 1e-9)));
+        for (int tick = 2; tick <= 5; tick++) {
+            assertEquals(tick == 5, scheduler.tick(field, NO_EMISSIONS, CAPACITY), "old length kept, tick " + tick);
+        }
+        assertSameBits(expected, field);
+
+        PollutionField second = seeded(9);
+        DiffusionStep.run(second, NO_EMISSIONS, CAPACITY, current.get().config());
+        PollutionField next = seeded(9);
+        for (int tick = 1; tick <= 3; tick++) {
+            assertEquals(tick == 3, scheduler.tick(next, NO_EMISSIONS, CAPACITY), "new length, tick " + tick);
+        }
+        assertSameBits(second, next);
+    }
+
+    @Test
     void invalidArgumentsAreRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new IntervalScheduler(0, CONFIG));
-        IntervalScheduler scheduler = new IntervalScheduler(20, CONFIG);
+        assertThrows(IllegalArgumentException.class, () -> new IntervalScheduler.Settings(0, CONFIG));
+        IntervalScheduler scheduler = new IntervalScheduler(() -> new IntervalScheduler.Settings(20, CONFIG));
         assertThrows(IllegalArgumentException.class, () -> scheduler.stepNow(seeded(7), NO_EMISSIONS, CAPACITY, -1));
     }
 }

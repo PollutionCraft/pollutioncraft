@@ -4,6 +4,7 @@ import io.github.pollutioncraft.core.EncodedField;
 import io.github.pollutioncraft.core.FieldCodec;
 import io.github.pollutioncraft.core.IntervalScheduler;
 import io.github.pollutioncraft.core.PollutionField;
+import io.github.pollutioncraft.mod.config.ServerConfig;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import net.minecraft.core.HolderLookup;
@@ -36,8 +37,13 @@ public final class DimensionPollution extends SavedData {
         this.field = field;
         this.preserved = preserved;
         this.paused = paused;
-        PollutionDefaults defaults = PollutionManager.DEFAULTS;
-        this.scheduler = new IntervalScheduler(defaults.spreadIntervalTicks(), defaults.diffusion());
+        this.scheduler = new IntervalScheduler(DimensionPollution::currentSettings);
+    }
+
+    /** Read from the server config once per interval (task 008), so overrides apply from the next interval. */
+    static IntervalScheduler.Settings currentSettings() {
+        ServerConfig config = PollutionCraftMod.config();
+        return new IntervalScheduler.Settings(config.spreadIntervalTicks(), config.diffusionConfig());
     }
 
     /**

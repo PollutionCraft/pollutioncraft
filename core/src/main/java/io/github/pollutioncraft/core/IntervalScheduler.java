@@ -2,25 +2,33 @@ package io.github.pollutioncraft.core;
 
 import java.util.Map;
 import java.util.function.LongToDoubleFunction;
+import java.util.function.Supplier;
 
 /**
  * Runs the diffusion interval time-sliced (architecture 3.3). Call {@link #tick} once per <em>active</em>
  * tick (the caller applies the {@link SimulationGate}). The first tick of an interval snapshots the field;
  * the work is spread evenly over the interval's ticks; the deltas are applied on its last tick.
  * {@link #stepNow} runs whole intervals synchronously through the same {@link DiffusionJob}.
+ * The settings are read from the supplier once when an interval starts, so a change applies from the next
+ * interval and never alters one in flight.
  */
 public final class IntervalScheduler {
-    private final int intervalTicks;
-    private final DiffusionConfig config;
+    /** The settings of one interval: its length in ticks and the diffusion parameters. */
+    public record Settings(int intervalTicks, DiffusionConfig config) {
+        public Settings {
+            if (intervalTicks < 1) {
+                throw new IllegalArgumentException("intervalTicks must be >= 1, was " + intervalTicks);
+            }
+        }
+    }
+
+    private final Supplier<Settings> settings;
     private DiffusionJob job;
+    private int intervalTicks;
     private int ticksIntoInterval;
 
-    public IntervalScheduler(int intervalTicks, DiffusionConfig config) {
-        if (intervalTicks < 1) {
-            throw new IllegalArgumentException("intervalTicks must be >= 1, was " + intervalTicks);
-        }
-        this.intervalTicks = intervalTicks;
-        this.config = config;
+    public IntervalScheduler(Supplier<Settings> settings) {
+        this.settings = settings;
     }
 
     /**
@@ -29,7 +37,9 @@ public final class IntervalScheduler {
      */
     public boolean tick(PollutionField field, Map<Long, Double> emissions, LongToDoubleFunction capacity) {
         if (job == null) {
-            job = DiffusionJob.start(field, emissions, capacity, config);
+            Settings current = settings.get();
+            intervalTicks = current.intervalTicks();
+            job = DiffusionJob.start(field, emissions, capacity, current.config());
             ticksIntoInterval = 0;
         }
         ticksIntoInterval++;
@@ -59,6 +69,7 @@ public final class IntervalScheduler {
         if (job != null) {
             finishNow();
         }
+        DiffusionConfig config = n == 0 ? null : settings.get().config();
         for (int i = 0; i < n; i++) {
             DiffusionStep.run(field, i == 0 ? emissions : Map.of(), capacity, config);
         }
