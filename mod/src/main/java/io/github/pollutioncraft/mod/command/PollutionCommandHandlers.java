@@ -45,7 +45,8 @@ final class PollutionCommandHandlers {
             return failure(source, PollutionText.pausedDimension(dimensionId(level)));
         }
         ChunkPollution chunk = dimension.field().get(ChunkKey.pack(target.x(), target.z()));
-        return read(source, withWorldNotice(source, PollutionText.get(target.x(), target.z(), chunk)));
+        double pending = dimension.pendingEmission(ChunkKey.pack(target.x(), target.z()));
+        return read(source, withWorldNotice(source, PollutionText.get(target.x(), target.z(), chunk, pending)));
     }
 
     static int rates(CommandSourceStack source, ChunkTarget target) {

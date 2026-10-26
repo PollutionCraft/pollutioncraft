@@ -24,7 +24,7 @@ class PollutionTextTest {
         chunk.absorbable = 12.5;
         chunk.persistent = 1;
 
-        List<String> lines = PollutionText.get(3, -4, chunk);
+        List<String> lines = PollutionText.get(3, -4, chunk, 2.5);
 
         String all = String.join("\n", lines);
         assertTrue(all.contains("chunk 3, -4"), all);
@@ -32,11 +32,17 @@ class PollutionTextTest {
         assertTrue(all.contains("persistent: 1"), all);
         assertTrue(all.contains("dominantSource: none"), all);
         assertTrue(all.contains("emittedLastInterval: 0"), all);
+        assertEquals(lines.indexOf("emittedLastInterval: 0") + 1, lines.indexOf("pending: 2.5"), all);
+    }
+
+    @Test
+    void pendingZeroIsShownAsZero() {
+        assertTrue(PollutionText.get(0, 0, null, 0).contains("pending: 0"));
     }
 
     @Test
     void absentChunkReadsAsZeros() {
-        String all = String.join("\n", PollutionText.get(0, 0, null));
+        String all = String.join("\n", PollutionText.get(0, 0, null, 0));
 
         assertTrue(all.contains("absorbable: 0"), all);
         assertTrue(all.contains("persistent: 0"), all);
@@ -50,7 +56,7 @@ class PollutionTextTest {
         chunk.dominantSourcePos = ((100L & 0x3FFFFFF) << 38) | ((-20L & 0x3FFFFFF) << 12) | (64L & 0xFFF);
         chunk.dominantSourceRate = 2.5;
 
-        String all = String.join("\n", PollutionText.get(6, -2, chunk));
+        String all = String.join("\n", PollutionText.get(6, -2, chunk, 0));
 
         assertTrue(all.contains("dominantSource: 100 64 -20 (2.5 PU/interval)"), all);
     }

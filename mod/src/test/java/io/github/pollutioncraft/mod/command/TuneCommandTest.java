@@ -109,4 +109,21 @@ class TuneCommandTest {
         }
         assertFalse(RatesText.effectiveRates(new ServerConfig(m -> {})).stream().anyMatch(l -> l.contains("(overridden)")));
     }
+
+    @Test
+    void ratesLinesShowTheEffectiveValueOfEveryKeyAndTheFileValueAfterReset() {
+        config.reload(Map.of("epsilon", 0.5));
+        tune.set("spreadFraction", 0.1);
+
+        List<String> lines = RatesText.effectiveRates(config);
+        for (var key : ConfigRegistry.KEYS) {
+            String shown = PollutionText.number(config.value(key));
+            assertTrue(lines.stream().anyMatch(l -> l.startsWith(key.name() + ": " + shown)), key.name() + " in " + lines);
+        }
+        assertTrue(lines.contains("epsilon: 0.5"), lines.toString());
+        assertTrue(lines.contains("spreadFraction: 0.1 (overridden)"), lines.toString());
+
+        tune.reset("spreadFraction");
+        assertTrue(RatesText.effectiveRates(config).contains("spreadFraction: 0.02"));
+    }
 }
