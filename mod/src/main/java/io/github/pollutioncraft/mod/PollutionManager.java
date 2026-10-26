@@ -5,7 +5,6 @@ import io.github.pollutioncraft.core.ChunkKey;
 import io.github.pollutioncraft.core.ChunkPollution;
 import io.github.pollutioncraft.core.SimulationGate;
 import java.nio.file.Path;
-import java.util.Map;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.dimension.DimensionType;
@@ -82,7 +81,7 @@ public final class PollutionManager {
         world.record().onServerTick(onlinePlayers);
         world.setDirty();
         for (ServerLevel level : server.getAllLevels()) {
-            tickDimension(level);
+            tickDimension(level, world);
         }
     }
 
@@ -98,25 +97,35 @@ public final class PollutionManager {
         if (dimension.isPreserved()) {
             return StepResult.PAUSED_DIMENSION_RECORD;
         }
-        dimension.scheduler().stepNow(dimension.field(), Map.of(), key -> 0.0, n);
-        dimension.setDirty();
+        WorldPollution world = world(level.getServer());
+        try {
+            dimension.scheduler().stepNow(dimension.field(), key -> 0.0, n, committed -> countCommitted(world, committed));
+        } finally {
+            dimension.setDirty();
+        }
         return StepResult.RAN;
     }
 
-    private static void tickDimension(ServerLevel level) {
+    private static void tickDimension(ServerLevel level, WorldPollution world) {
         DimensionPollution dimension = dimension(level);
         if (dimension.isPreserved()) {
             return;
         }
         try {
-            // Absorption is stubbed to zero until P2 (task 013); emissions arrive with task 010.
-            if (dimension.scheduler().tick(dimension.field(), Map.of(), key -> 0.0)) {
+            // Absorption is stubbed to zero until P2 (task 013).
+            if (dimension.scheduler().tick(dimension.field(), key -> 0.0, committed -> countCommitted(world, committed))) {
                 dimension.setDirty();
             }
         } catch (RuntimeException e) {
             LOGGER.error("Pollution step failed in {}; dropping this interval", level.dimension().location(), e);
             dimension.scheduler().abandon();
         }
+    }
+
+    /** An interval committed: its emissions join the world's never-decreasing {@code grossEmitted}. */
+    private static void countCommitted(WorldPollution world, double emitted) {
+        world.record().addGrossEmitted(emitted);
+        world.setDirty();
     }
 
     /** Local pollution of a chunk; 0 while the dimension is paused (unreadable stored record). */

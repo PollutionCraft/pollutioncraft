@@ -32,10 +32,14 @@ public final class ConfigRegistry {
     public static final ConfigKey DEFAULT_CAPACITY = new ConfigKey(
             "defaultCapacity", ConfigKey.Type.DECIMAL, 100, 0, 1e9,
             "Absorption capacity (PU per interval) of every chunk until the absorption model arrives. Placeholder.");
+    public static final ConfigKey MAX_EMITTERS_PER_CHUNK = new ConfigKey(
+            "maxEmittersPerChunk", ConfigKey.Type.INTEGER, 4096, 1, 1_000_000,
+            "Caps the distinct emitter positions tracked per chunk per interval. Emissions beyond it still count "
+                    + "toward the chunk's pollution but are not attributed to a position (no dominant source).");
 
     public static final List<ConfigKey> KEYS = List.of(
             SPREAD_INTERVAL_TICKS, SPREAD_FRACTION, SPREAD_THRESHOLD, PERSISTENT_DECAY, EPSILON,
-            EMISSION_MULTIPLIER, DEFAULT_CAPACITY);
+            EMISSION_MULTIPLIER, DEFAULT_CAPACITY, MAX_EMITTERS_PER_CHUNK);
 
     /** Rules that span keys; checked against effective values by load and by overrides. */
     public static final List<CrossFieldRule> CROSS_FIELD_RULES = List.of(new CrossFieldRule(

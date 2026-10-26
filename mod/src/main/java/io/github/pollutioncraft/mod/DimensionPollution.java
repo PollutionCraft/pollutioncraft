@@ -1,5 +1,6 @@
 package io.github.pollutioncraft.mod;
 
+import io.github.pollutioncraft.core.EmissionBuffer;
 import io.github.pollutioncraft.core.EncodedField;
 import io.github.pollutioncraft.core.FieldCodec;
 import io.github.pollutioncraft.core.IntervalScheduler;
@@ -16,7 +17,7 @@ import org.slf4j.LoggerFactory;
 /**
  * The pollution field of one dimension, saved with that dimension's data (ADR 0003). The scheduler is
  * transient: an interval in flight when the server stops is simply dropped, and the next one starts from
- * the saved field.
+ * the saved field. So is the {@link EmissionBuffer}: emissions not yet committed are lost on restart.
  */
 public final class DimensionPollution extends SavedData {
     static final String STORAGE_KEY = "pollutioncraft_field";
@@ -24,6 +25,9 @@ public final class DimensionPollution extends SavedData {
 
     private final PollutionField field;
     private final IntervalScheduler scheduler;
+    private final EmissionBuffer emissions =
+            new EmissionBuffer(() -> PollutionCraftMod.config().maxEmittersPerChunk(), LOGGER::warn);
+    private boolean pausedEmitLogged;
     /** The raw record when it could not be read (unknown or missing dataVersion); null otherwise. */
     private final CompoundTag preserved;
     /** True when the stored data is kept as is: either {@link #preserved} or an unparsable file. */
@@ -37,7 +41,7 @@ public final class DimensionPollution extends SavedData {
         this.field = field;
         this.preserved = preserved;
         this.paused = paused;
-        this.scheduler = new IntervalScheduler(DimensionPollution::currentSettings);
+        this.scheduler = new IntervalScheduler(DimensionPollution::currentSettings, emissions);
     }
 
     /** Read from the server config once per interval (task 008), so overrides apply from the next interval. */
@@ -120,5 +124,22 @@ public final class DimensionPollution extends SavedData {
 
     public IntervalScheduler scheduler() {
         return scheduler;
+    }
+
+    /** Where {@code emit} puts amounts until the next interval drains them. Server thread only. */
+    EmissionBuffer emissions() {
+        return emissions;
+    }
+
+    /** Emissions buffered for the chunk and not yet drained into an interval, in PU; 0 while paused. */
+    public double pendingEmission(long chunkKey) {
+        return paused ? 0.0 : emissions.pending(chunkKey);
+    }
+
+    /** True the first time it is called, so a paused dimension logs a refused emit once per session. */
+    boolean firstPausedEmit() {
+        boolean first = !pausedEmitLogged;
+        pausedEmitLogged = true;
+        return first;
     }
 }

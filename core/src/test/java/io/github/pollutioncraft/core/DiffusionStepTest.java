@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 
 class DiffusionStepTest {
     private static final LongToDoubleFunction NO_ABSORPTION = key -> 0.0;
-    private static final Map<Long, Double> NO_EMISSIONS = Map.of();
+    private static final DrainedEmissions NO_EMISSIONS = DrainedEmissions.NONE;
 
     private static DiffusionConfig config(double fraction, double threshold, double decay, double epsilon) {
         return new DiffusionConfig(fraction, threshold, decay, epsilon);
@@ -42,7 +42,7 @@ class DiffusionStepTest {
         long origin = ChunkKey.pack(0, 0);
         PollutionField field = fieldWith(origin, 100.0, 0.0);
 
-        DiffusionStep.run(field, Map.of(origin, 10.0), NO_ABSORPTION, config(0.02, 1.0, 0.0, 1e-12));
+        DiffusionStep.run(field, EmissionBufferTest.chunkTotals(Map.of(origin, 10.0)), NO_ABSORPTION, config(0.02, 1.0, 0.0, 1e-12));
 
         // 110 after emission; each neighbour gets 2% of 110, the origin keeps 92%.
         assertEquals(110.0 * 0.92, field.get(origin).absorbable, 1e-9);
@@ -117,7 +117,7 @@ class DiffusionStepTest {
             c.absorbable = rnd.nextDouble() * 80;
             c.persistent = rnd.nextDouble() * 40;
         }
-        Map<Long, Double> emissions = Map.of(ChunkKey.pack(0, 0), 7.5, ChunkKey.pack(20, 20), 3.0);
+        DrainedEmissions emissions = EmissionBufferTest.chunkTotals(Map.of(ChunkKey.pack(0, 0), 7.5, ChunkKey.pack(20, 20), 3.0));
         HashMap<Long, Double> localBefore = new HashMap<>();
         for (long k : field.sortedKeys()) {
             localBefore.put(k, field.get(k).local());
@@ -166,7 +166,7 @@ class DiffusionStepTest {
         }
         LongToDoubleFunction capacity = key -> Math.abs(key % 5) * 0.37;
         DiffusionConfig cfg = config(0.037, 1.5, 0.013, 1e-7);
-        Map<Long, Double> emissions = Map.of(ChunkKey.pack(1, 1), 12.345, ChunkKey.pack(-3, 2), 0.1);
+        DrainedEmissions emissions = EmissionBufferTest.chunkTotals(Map.of(ChunkKey.pack(1, 1), 12.345, ChunkKey.pack(-3, 2), 0.1));
 
         for (int step = 0; step < 5; step++) {
             DiffusionStep.run(forward, emissions, capacity, cfg);
@@ -193,18 +193,6 @@ class DiffusionStepTest {
         assertThrows(IllegalArgumentException.class, () -> config(0.02, 1, 1.5, 0));
         assertThrows(IllegalArgumentException.class, () -> config(0.02, 1, 0, -1));
         config(0.2499, 0, 1.0, 0); // valid edge values
-    }
-
-    @Test
-    void invalidEmissionsAreRejectedAndLeaveTheFieldUntouched() {
-        long origin = ChunkKey.pack(0, 0);
-        PollutionField field = fieldWith(origin, 10.0, 0.0);
-        DiffusionConfig cfg = config(0.02, 1.0, 0.0, 1e-9);
-        assertThrows(IllegalArgumentException.class, () -> DiffusionStep.run(field, Map.of(origin, -1.0), NO_ABSORPTION, cfg));
-        assertThrows(IllegalArgumentException.class, () -> DiffusionStep.run(field, Map.of(origin, Double.NaN), NO_ABSORPTION, cfg));
-        assertThrows(IllegalArgumentException.class, () -> DiffusionStep.run(field, Map.of(origin, Double.POSITIVE_INFINITY), NO_ABSORPTION, cfg));
-        assertEquals(10.0, field.get(origin).absorbable, 0.0);
-        assertFalse(field.size() != 1);
     }
 
     @Test

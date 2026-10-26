@@ -162,9 +162,15 @@ tasks.register('deployToDevInstance', DeployToDevInstance) {
 // The vanilla server exits 0 when it crashes on startup (e.g. "No test functions were given!"), so the
 // run is only accepted if its log shows the required tests passed. Test failures already exit non-zero.
 def gameTestLog = layout.projectDirectory.file('run/gametest/logs/latest.log').asFile
+// Pollution saved by an earlier local run would be loaded again and skew tests that measure spreading, so
+// every run starts from a fresh world. run/gametest/config is kept.
+def gameTestWorld = layout.projectDirectory.dir('run/gametest/world').asFile
 
 tasks.named('runGameTestServer') {
-    doFirst { gameTestLog.delete() }
+    doFirst {
+        gameTestLog.delete()
+        gameTestWorld.deleteDir()
+    }
     doLast {
         if (!gameTestLog.isFile() || !gameTestLog.text.contains('required tests passed')) {
             throw new GradleException("runGameTestServer exited normally but never reported 'required tests passed' " +

@@ -3,7 +3,6 @@ package io.github.pollutioncraft.core;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
-import java.util.Map;
 import java.util.Random;
 import org.junit.jupiter.api.Test;
 
@@ -31,7 +30,7 @@ class DiffusionPerformanceTest {
             PollutionField field = fieldWith2500Chunks(); // fresh each run: every stored chunk spreads
             stored = field.size();
             long t = System.nanoTime();
-            DiffusionStep.run(field, Map.of(), key -> 0.0, config);
+            DiffusionStep.run(field, DrainedEmissions.NONE, key -> 0.0, config);
             long elapsed = System.nanoTime() - t;
             if (i >= 20) { // first 20 runs warm up the JIT
                 nanos[i - 20] = elapsed;
@@ -44,5 +43,33 @@ class DiffusionPerformanceTest {
                 stored, medianMs, p95Ms, medianMs / 20);
 
         assertTrue(medianMs < 10.0, "median full step " + medianMs + " ms exceeds 10 ms (0.5 ms x 20 ticks)");
+    }
+
+    @Test
+    void fullIntervalWithEmissionsInOneHundredChunksFitsTheTickBudget() {
+        DiffusionConfig config = new DiffusionConfig(0.02, 15.0, 0.0, 0.001);
+        long[] nanos = new long[60];
+        for (int i = 0; i < 20 + nanos.length; i++) {
+            PollutionField field = fieldWith2500Chunks();
+            EmissionBuffer buffer = new EmissionBuffer(() -> 4096, message -> {});
+            long[] stored = field.sortedKeys();
+            for (int c = 0; c < 100; c++) {
+                for (int emitter = 0; emitter < 5; emitter++) {
+                    buffer.add(stored[c * 20], emitter, 1.5 + emitter, "perf");
+                }
+            }
+            long t = System.nanoTime();
+            DiffusionStep.run(field, buffer.drain(), key -> 0.0, config); // drain + step: the whole interval cost
+            long elapsed = System.nanoTime() - t;
+            if (i >= 20) {
+                nanos[i - 20] = elapsed;
+            }
+        }
+        Arrays.sort(nanos);
+        double medianMs = nanos[nanos.length / 2] / 1e6;
+        System.out.printf("PERF drain + diffusion step @2500 chunks, 100 emitting: median %.3f ms, per-tick avg (/20) %.3f ms%n",
+                medianMs, medianMs / 20);
+
+        assertTrue(medianMs < 10.0, "median interval " + medianMs + " ms exceeds 10 ms (0.5 ms x 20 ticks)");
     }
 }

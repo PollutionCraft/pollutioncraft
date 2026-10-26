@@ -35,6 +35,7 @@ public final class PollutionSimulationGameTests {
 
     /** The gametest world persists between local runs, so clear the chunk and its neighbours first. */
     private static void clearAround(DimensionPollution dimension, int chunkX, int chunkZ) {
+        dimension.scheduler().abandon(); // field writes only after abandon(): an interval in flight would overwrite them
         dimension.field().remove(ChunkKey.pack(chunkX, chunkZ));
         dimension.field().remove(ChunkKey.pack(chunkX - 1, chunkZ));
         dimension.field().remove(ChunkKey.pack(chunkX + 1, chunkZ));
