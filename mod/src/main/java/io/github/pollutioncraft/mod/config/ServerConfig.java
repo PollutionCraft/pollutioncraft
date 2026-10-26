@@ -39,6 +39,14 @@ public final class ServerConfig {
         return overrides.effective(key.name(), fileValues);
     }
 
+    /** The effective value (override over file value) of a registry key, whichever key it is. */
+    public double value(ConfigKey key) {
+        if (!ConfigRegistry.KEYS.contains(key)) {
+            throw new IllegalArgumentException("not a registry config key: " + key.name());
+        }
+        return effective(key);
+    }
+
     public int spreadIntervalTicks() {
         return (int) effective(ConfigRegistry.SPREAD_INTERVAL_TICKS);
     }

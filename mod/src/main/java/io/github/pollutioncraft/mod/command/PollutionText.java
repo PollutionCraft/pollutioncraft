@@ -31,15 +31,16 @@ public final class PollutionText {
         return rounded.signum() == 0 ? "0" : rounded.toPlainString();
     }
 
-    /** {@code chunk} is null for a chunk with no stored entry, which reads as zeros. */
-    public static List<String> get(int chunkX, int chunkZ, ChunkPollution chunk) {
+    /** {@code chunk} is null for a chunk with no stored entry, which reads as zeros; {@code pending} is the buffered, not yet applied emission. */
+    public static List<String> get(int chunkX, int chunkZ, ChunkPollution chunk, double pending) {
         ChunkPollution c = chunk == null ? new ChunkPollution() : chunk;
         return List.of(
                 "chunk " + chunkX + ", " + chunkZ,
                 "absorbable: " + number(c.absorbable),
                 "persistent: " + number(c.persistent),
                 "dominantSource: " + dominantSource(c),
-                "emittedLastInterval: " + number(c.emittedLastInterval));
+                "emittedLastInterval: " + number(c.emittedLastInterval),
+                "pending: " + number(pending));
     }
 
     /** Last-interval flows of the chunk; per-neighbour outflow is the equal split of the total. */

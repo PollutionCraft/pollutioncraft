@@ -308,6 +308,31 @@ public final class DebugCommandGameTests {
         helper.succeed();
     }
 
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void getShowsTheBufferedEmissionUntilTheIntervalApplies(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        DimensionPollution dimension = PollutionManager.dimension(level);
+        PollutionCraftMod.config().overrides().clearAll();
+        clearSquare(dimension, 96_000, 96_000, 1);
+        try {
+            PollutionManager.api().emit(level, new BlockPos(96_000 * 16 + 8, 64, 96_000 * 16 + 8), 3.0);
+
+            Capture before = run(level, 2, 0, 0, "pollution get 96000 96000");
+            helper.assertTrue(before.text().contains("pending: 3"), "buffered emission must show: " + before.text());
+
+            for (int i = 0; i < PollutionCraftMod.config().spreadIntervalTicks(); i++) {
+                PollutionManager.tick(server, 1);
+            }
+            Capture after = run(level, 2, 0, 0, "pollution get 96000 96000");
+            helper.assertTrue(after.text().contains("pending: 0") && after.text().contains("absorbable: 3"),
+                    "after the interval the amount is applied: " + after.text());
+            helper.succeed();
+        } finally {
+            clearSquare(dimension, 96_000, 96_000, 1);
+        }
+    }
+
     private static DimensionPollution unreadableDimension(ServerLevel level) {
         CompoundTag garbage = new CompoundTag();
         garbage.putInt("dataVersion", 999);
