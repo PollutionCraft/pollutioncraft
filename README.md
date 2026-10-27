@@ -40,6 +40,12 @@ Run by `./gradlew build` (1-4 are ArchUnit tests in `mod/src/test`):
 4. **Adapter imports:** `compat.*` classes reference, of our packages, only `api.*` and their own package.
 5. **Dependency allowlist** (Gradle task `verifyNoTargetModsOnClasspath`, not ArchUnit): compile and test classpaths hold only internal, Minecraft-modding and generic Java dependencies; no target mod (ADR 0015). The allowlist of groups is in `gradle/no-target-mods.gradle`; adding a group is a reviewed change.
 
+## Installing and the dev overlay
+
+**The mod is required on both the client and the server.** A client without it cannot join a server that has it, and a client that has it cannot join a server that lacks it (the overlay payload is a required network channel).
+
+The F3 pollution overlay is a developer tool. As an operator (permission level 2), run `/pollution overlay on`; the F3 debug screen then shows a `Pollution` section for your current chunk, refreshed after every simulation interval (`/pollution step` refreshes it at once). `/pollution overlay off` removes it. The setting is per player, in memory only, and starts off every time you join. When the numbers are missing or stale (another chunk or dimension, no update for three intervals, an incompatible mod version) the section reads `no data`; it never shows old numbers.
+
 ## Running with target mods
 
 No build of ours depends on a target mod such as GTM (ADR 0015): `./gradlew build` and `runGameTestServer` need no GTM and no `maven.gtceu.com`. The pack is the only place GTM is pinned (task 025). To run with GTM, either:

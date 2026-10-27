@@ -43,7 +43,8 @@ public final class PollutionCommands {
                 .then(setCommand())
                 .then(clearCommand())
                 .then(stepCommand())
-                .then(tuneCommand()));
+                .then(tuneCommand())
+                .then(OverlayCommand.node()));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> chunkCommand(
