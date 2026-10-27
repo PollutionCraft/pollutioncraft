@@ -16,7 +16,7 @@ public final class RatesText {
     }
 
     /** One value with its marker, shared with {@code tune} listings. */
-    static String line(ServerConfig config, ConfigKey key) {
+    public static String line(ServerConfig config, ConfigKey key) {
         String line = key.name() + ": " + PollutionText.number(config.value(key));
         return config.overrides().get(key.name()).isPresent() ? line + " " + OVERRIDDEN : line;
     }

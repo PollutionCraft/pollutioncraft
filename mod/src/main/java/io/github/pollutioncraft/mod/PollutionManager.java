@@ -5,6 +5,7 @@ import io.github.pollutioncraft.core.ChunkKey;
 import io.github.pollutioncraft.core.ChunkPollution;
 import io.github.pollutioncraft.core.SimulationGate;
 import io.github.pollutioncraft.mod.emitter.EmitterEngine;
+import io.github.pollutioncraft.mod.overlay.OverlaySender;
 import java.nio.file.Path;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -104,6 +105,7 @@ public final class PollutionManager {
         } finally {
             dimension.setDirty();
         }
+        OverlaySender.afterInterval(level);
         return StepResult.RAN;
     }
 
@@ -118,6 +120,7 @@ public final class PollutionManager {
             // Absorption is stubbed to zero until P2 (task 013).
             if (dimension.scheduler().tick(dimension.field(), key -> 0.0, committed -> countCommitted(world, committed))) {
                 dimension.setDirty();
+                OverlaySender.afterInterval(level);
             }
         } catch (RuntimeException e) {
             LOGGER.error("Pollution step failed in {}; dropping this interval", level.dimension().location(), e);

@@ -55,6 +55,8 @@ neoForge {
             sourceSet = sourceSets.gametest
             gameDirectory = layout.projectDirectory.dir('run/gametest')
             systemProperty 'neoforge.enabledGameTestNamespaces', 'pollutioncraft'
+            // Logs every class the JVM loads (relative to the run directory); checked after the run, see below.
+            jvmArgument '-Xlog:class+load:file=classload.log'
         }
     }
 }
@@ -165,16 +167,47 @@ def gameTestLog = layout.projectDirectory.file('run/gametest/logs/latest.log').a
 // Pollution saved by an earlier local run would be loaded again and skew tests that measure spreading, so
 // every run starts from a fresh world. run/gametest/config is kept.
 def gameTestWorld = layout.projectDirectory.dir('run/gametest/world').asFile
+def classLoadLog = layout.projectDirectory.file('run/gametest/classload.log').asFile
 
 tasks.named('runGameTestServer') {
     doFirst {
         gameTestLog.delete()
         gameTestWorld.deleteDir()
+        classLoadLog.delete()
     }
     doLast {
         if (!gameTestLog.isFile() || !gameTestLog.text.contains('required tests passed')) {
             throw new GradleException("runGameTestServer exited normally but never reported 'required tests passed' " +
                     "(startup crash or no tests ran). See ${gameTestLog}.")
         }
+
+        // The GameTest server is a dedicated-dist server, so a client class loaded here would crash a real one.
+        // PollutionCraftMod must be in the log: that proves the log lists classes loaded by FML's class loader,
+        // so an empty or missing log cannot pass.
+        if (!classLoadLog.isFile()) {
+            throw new GradleException("runGameTestServer left no class-load log at ${classLoadLog}")
+        }
+        def clientClasses = []
+        def sawMod = false
+        int lines = 0
+        classLoadLog.eachLine { line ->
+            lines++
+            def matcher = line =~ /\] (\S+) source:/
+            if (matcher.find()) {
+                def name = matcher.group(1)
+                sawMod |= name == 'io.github.pollutioncraft.mod.PollutionCraftMod'
+                if (name.startsWith('io.github.pollutioncraft.mod.client.') || name.startsWith('net.minecraft.client.')) {
+                    clientClasses << name
+                }
+            }
+        }
+        if (!sawMod) {
+            throw new GradleException("class-load log ${classLoadLog} does not list io.github.pollutioncraft.mod.PollutionCraftMod; it cannot prove anything")
+        }
+        if (clientClasses) {
+            throw new GradleException("the dedicated-dist GameTest server loaded client classes: ${clientClasses.take(10)}. " +
+                    "Check that no code outside io.github.pollutioncraft.mod.client touches them, and that OverlayRegistration still uses a lambda.")
+        }
+        logger.quiet("Class-load check passed: ${lines} classes loaded, none from mod.client or net.minecraft.client (log ${classLoadLog.length().intdiv(1024)} KB)")
     }
 }
