@@ -1,6 +1,7 @@
 package io.github.pollutioncraft.mod.emitter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -43,8 +44,8 @@ class MappingValidatorTest {
         assertEquals(MappingEntry.TargetKind.BLOCK, entry.kind());
         assertEquals("minecraft:furnace", entry.target());
         assertEquals(1.0, entry.rate());
-        assertEquals("lit", entry.property());
-        assertEquals("true", entry.value());
+        assertEquals(new MappingEntry.ActiveWhen("lit", "true"), entry.activeWhen());
+        assertFalse(entry.isAlwaysActive());
         assertTrue(log.isEmpty(), log::toString);
     }
 
@@ -63,6 +64,32 @@ class MappingValidatorTest {
         assertTrue(log.isEmpty(), log::toString);
     }
 
+    @Test
+    void anEntryWithoutActiveWhenIsAlwaysActive() {
+        Map<String, Object> raw = furnace();
+        raw.remove("active_when");
+        raw.put("block", "minecraft:torch");
+        raw.put("rate", 0.01);
+
+        MappingEntry entry = validate(raw).orElseThrow();
+
+        assertTrue(entry.isAlwaysActive());
+        assertEquals(null, entry.activeWhen());
+        assertEquals("minecraft:torch", entry.target());
+        assertEquals(0.01, entry.rate());
+        assertTrue(log.isEmpty(), log::toString);
+    }
+
+    @Test
+    void anAlwaysActiveTagEntryIsAcceptedToo() {
+        Map<String, Object> raw = furnace();
+        raw.remove("active_when");
+        raw.remove("block");
+        raw.put("tag", "minecraft:candles");
+
+        assertTrue(validate(raw).orElseThrow().isAlwaysActive());
+    }
+
     static Stream<Arguments> invalidEntries() {
         List<Arguments> cases = new ArrayList<>();
         cases.add(Arguments.of("no target", (java.util.function.Consumer<Map<String, Object>>) r -> r.remove("block")));
@@ -74,7 +101,14 @@ class MappingValidatorTest {
         cases.add(Arguments.of("negative rate", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("rate", -0.5)));
         cases.add(Arguments.of("NaN rate", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("rate", Double.NaN)));
         cases.add(Arguments.of("infinite rate", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("rate", Double.POSITIVE_INFINITY)));
-        cases.add(Arguments.of("missing active_when", (java.util.function.Consumer<Map<String, Object>>) r -> r.remove("active_when")));
+        cases.add(Arguments.of("active_when is null", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("active_when", null)));
+        cases.add(Arguments.of("active_when is an empty object", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("active_when", new HashMap<>())));
+        cases.add(Arguments.of("property without value", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("active_when", new HashMap<>(Map.of("property", "lit")))));
+        cases.add(Arguments.of("value without property", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("active_when", new HashMap<>(Map.of("value", "true")))));
+        cases.add(Arguments.of("empty property", (java.util.function.Consumer<Map<String, Object>>) r -> activeWhen(r).put("property", "")));
+        cases.add(Arguments.of("empty value", (java.util.function.Consumer<Map<String, Object>>) r -> activeWhen(r).put("value", "")));
+        cases.add(Arguments.of("blank value", (java.util.function.Consumer<Map<String, Object>>) r -> activeWhen(r).put("value", "  ")));
+        cases.add(Arguments.of("property is a number", (java.util.function.Consumer<Map<String, Object>>) r -> activeWhen(r).put("property", 3)));
         cases.add(Arguments.of("active_when is not an object", (java.util.function.Consumer<Map<String, Object>>) r -> r.put("active_when", "lit=true")));
         cases.add(Arguments.of("missing property", (java.util.function.Consumer<Map<String, Object>>) r -> activeWhen(r).remove("property")));
         cases.add(Arguments.of("missing value", (java.util.function.Consumer<Map<String, Object>>) r -> activeWhen(r).remove("value")));
