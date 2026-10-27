@@ -22,17 +22,20 @@ public final class MappingValidator {
             log.accept("Skipping emitter mapping " + fileId + ": " + problem);
             return Optional.empty();
         }
-        Map<?, ?> activeWhen = (Map<?, ?>) raw.get("active_when");
         boolean isBlock = raw.containsKey("block");
+        MappingEntry.ActiveWhen activeWhen = raw.containsKey("active_when")
+                ? new MappingEntry.ActiveWhen(
+                        (String) ((Map<?, ?>) raw.get("active_when")).get("property"),
+                        (String) ((Map<?, ?>) raw.get("active_when")).get("value"))
+                : null;
         return Optional.of(new MappingEntry(
                 isBlock ? MappingEntry.TargetKind.BLOCK : MappingEntry.TargetKind.TAG,
                 (String) raw.get(isBlock ? "block" : "tag"),
                 ((Number) raw.get("rate")).doubleValue(),
-                (String) activeWhen.get("property"),
-                (String) activeWhen.get("value")));
+                activeWhen));
     }
 
-    /** The first thing wrong with the entry, or {@code null}. */
+    /** The first thing wrong with the entry, or {@code null} if it is valid. */
     private static String problemWith(Map<String, ?> raw) {
         boolean hasBlock = raw.containsKey("block");
         boolean hasTag = raw.containsKey("tag");
@@ -50,14 +53,18 @@ public final class MappingValidator {
         if (Double.isNaN(value) || Double.isInfinite(value) || value < 0) {
             return "'rate' must be finite and >= 0, was " + value;
         }
+        // No active_when means always active. One that is present must be complete: the mod does not guess.
+        if (!raw.containsKey("active_when")) {
+            return null;
+        }
         if (!(raw.get("active_when") instanceof Map<?, ?> activeWhen)) {
-            return "'active_when' is required and must be an object with 'property' and 'value'";
+            return "'active_when' must be an object with 'property' and 'value' (or be left out for an always-active block)";
         }
         if (!(activeWhen.get("property") instanceof String property) || property.isBlank()) {
             return "'active_when.property' is required and must be a non-empty string";
         }
-        if (!(activeWhen.get("value") instanceof String)) {
-            return "'active_when.value' is required and must be a string (the serialized property value)";
+        if (!(activeWhen.get("value") instanceof String activeValue) || activeValue.isBlank()) {
+            return "'active_when.value' is required and must be a non-empty string (the serialized property value)";
         }
         return null;
     }

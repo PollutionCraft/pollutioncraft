@@ -79,6 +79,10 @@ public final class ServerConfig {
         return (int) effective(ConfigRegistry.MAX_EMITTERS_PER_CHUNK);
     }
 
+    public int maxTrackedPerChunk() {
+        return (int) effective(ConfigRegistry.MAX_TRACKED_PER_CHUNK);
+    }
+
     /** The diffusion parameters for the next interval, from the effective values. */
     public DiffusionConfig diffusionConfig() {
         return new DiffusionConfig(spreadFraction(), spreadThreshold(), persistentDecay(), epsilon());

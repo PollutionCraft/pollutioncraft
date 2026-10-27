@@ -141,11 +141,11 @@ public final class EmitterGameTests {
     }
 
     private static MappingEntry block(String id, double rate, String property, String value) {
-        return new MappingEntry(MappingEntry.TargetKind.BLOCK, id, rate, property, value);
+        return new MappingEntry(MappingEntry.TargetKind.BLOCK, id, rate, new MappingEntry.ActiveWhen(property, value));
     }
 
     private static MappingEntry tag(String id, double rate, String property, String value) {
-        return new MappingEntry(MappingEntry.TargetKind.TAG, id, rate, property, value);
+        return new MappingEntry(MappingEntry.TargetKind.TAG, id, rate, new MappingEntry.ActiveWhen(property, value));
     }
 
     // ---- engine with the test lamp mapping (plan test 4) ------------------------------------------
@@ -485,6 +485,419 @@ public final class EmitterGameTests {
                 .thenSucceed();
     }
 
+    // ---- always-active mappings and the tracked-position cap (task 031) ---------------------------------------------
+
+    private static final double GLOW_RATE = 0.25;
+    private static final String CAP_KEY = "maxTrackedPerChunk";
+    /** A deadline in engine ticks for the repair and cap-change tests; the design's bound is about 16. */
+    private static final int REPAIR_DEADLINE_TICKS = 16;
+
+    private static BlockState glowstone() {
+        return Blocks.GLOWSTONE.defaultBlockState();
+    }
+
+    /** A private engine with the real rules, the real cap key and a log that the test can read. */
+    private static EmitterEngine capEngine(List<String> log) {
+        return new EmitterEngine(
+                EmitterEngine::currentRules,
+                (l, k) -> true,
+                () -> 1.0,
+                PollutionManager.api(),
+                () -> PollutionCraftMod.config().maxTrackedPerChunk(),
+                log::add);
+    }
+
+    /** {@code count} positions in a row of the chunk containing {@code anywhere}: x = chunk min x + i, one z, one y. */
+    private static List<BlockPos> row(BlockPos anywhere, int count, int zOffset) {
+        List<BlockPos> row = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            row.add(new BlockPos(((anywhere.getX() >> 4) << 4) + i, anywhere.getY(), ((anywhere.getZ() >> 4) << 4) + zOffset));
+        }
+        return row;
+    }
+
+    private static void placeAll(ServerLevel level, List<BlockPos> positions, BlockState state) {
+        positions.forEach(pos -> level.setBlock(pos, state, 2 | 16)); // no update: the test feeds its own engine
+    }
+
+    /** The {@code n} lowest packed positions, ascending: the set the cap must keep. */
+    private static long[] lowest(List<BlockPos> positions, int n) {
+        return positions.stream().mapToLong(BlockPos::asLong).sorted().limit(n).toArray();
+    }
+
+    private static String describe(long[] packed) {
+        return java.util.Arrays.stream(packed).mapToObj(p -> BlockPos.of(p).toShortString()).toList().toString();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void anAlwaysActiveBlockEmitsItsRateAndStopsWhenRemoved(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        BlockPos block = helper.absolutePos(new BlockPos(1, 2, 1));
+        requireTicking(helper, level, block);
+        DimensionPollution dimension = reset(level, chunkOf(block));
+        double grossBefore = gross(server);
+        try {
+            helper.setBlock(new BlockPos(1, 2, 1), glowstone());
+            helper.assertTrue(ENGINE.isTracked(level, block), "tracked at placement");
+
+            interval(server);
+
+            helper.assertTrue(PollutionManager.api().getLocal(level, block.getX() >> 4, block.getZ() >> 4) == GLOW_RATE, "exactly the rate, no property involved");
+            helper.assertTrue(gross(server) == grossBefore + GLOW_RATE, "gross rose by the rate");
+            helper.assertTrue(dimension.field().get(chunkOf(block)).dominantSourcePos == block.asLong(), "attributed to the block");
+
+            helper.setBlock(new BlockPos(1, 2, 1), Blocks.AIR);
+            interval(server);
+
+            helper.assertTrue(gross(server) == grossBefore + GLOW_RATE, "nothing after removal");
+            helper.assertTrue(dimension.field().get(chunkOf(block)).emittedLastInterval == 0.0, "emittedLastInterval cleared");
+            helper.assertTrue(!ENGINE.isTracked(level, block), "dropped when read");
+        } finally {
+            helper.setBlock(new BlockPos(1, 2, 1), Blocks.AIR);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void aStateMappingStillEmitsOnlyWhileLitBesideAnAlwaysActiveOne(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        BlockPos lamp = helper.absolutePos(new BlockPos(1, 2, 1));
+        requireTicking(helper, level, lamp);
+        reset(level, chunkOf(lamp));
+        double grossBefore = gross(server);
+        try {
+            helper.setBlock(new BlockPos(1, 2, 1), litLamp());
+            helper.setBlock(new BlockPos(2, 2, 1), Blocks.REDSTONE_BLOCK);
+            helper.setBlock(new BlockPos(3, 2, 1), glowstone());
+            interval(server);
+            helper.assertTrue(gross(server) == grossBefore + LAMP_RATE + GLOW_RATE, "lit lamp and glowstone: " + (gross(server) - grossBefore));
+
+            helper.setBlock(new BlockPos(1, 2, 1), Blocks.REDSTONE_LAMP.defaultBlockState()); // unlit
+            interval(server);
+            helper.assertTrue(gross(server) == grossBefore + LAMP_RATE + 2 * GLOW_RATE, "unlit lamp adds nothing, glowstone still does");
+        } finally {
+            for (int x = 1; x <= 3; x++) {
+                helper.setBlock(new BlockPos(x, 2, 1), Blocks.AIR);
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE, batch = "emitters_always_nonticking", timeoutTicks = 400)
+    public static void anAlwaysActiveBlockInANonTickingChunkEmitsNothingUntilItTicks(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        ChunkPos chunkPos = new ChunkPos(98_400, 98_000);
+        BlockPos block = new BlockPos(chunkPos.getMinBlockX() + 3, 64, chunkPos.getMinBlockZ() + 3);
+        level.getChunkSource().addRegionTicket(HOLD, chunkPos, 0, chunkPos); // level 33: loaded, not block-ticking
+        level.getChunk(chunkPos.x, chunkPos.z);
+        helper.startSequence()
+                .thenExecute(() -> {
+                    helper.assertTrue(!level.shouldTickBlocksAt(block), "precondition: loaded but not block-ticking");
+                    DimensionPollution dimension = reset(level, chunkOf(block));
+                    double grossBefore = gross(server);
+                    level.setBlock(block, glowstone(), 3);
+                    helper.assertTrue(ENGINE.isTracked(level, block), "tracked even though the chunk does not tick");
+
+                    interval(server);
+
+                    helper.assertTrue(dimension.field().get(chunkOf(block)) == null && gross(server) == grossBefore, "a non-ticking chunk emits nothing");
+                    level.getChunkSource().addRegionTicket(HOLD, chunkPos, 1, chunkPos);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(level.shouldTickBlocksAt(block), "chunk now ticks"))
+                .thenExecute(() -> {
+                    try {
+                        double grossBefore = gross(server);
+                        interval(server);
+                        helper.assertTrue(gross(server) == grossBefore + GLOW_RATE, "emits once it ticks");
+                    } finally {
+                        level.setBlock(block, Blocks.AIR.defaultBlockState(), 3);
+                        level.getChunkSource().removeRegionTicket(HOLD, chunkPos, 0, chunkPos);
+                        level.getChunkSource().removeRegionTicket(HOLD, chunkPos, 1, chunkPos);
+                    }
+                })
+                .thenSucceed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE, batch = "emitters_always_unload", timeoutTicks = 600)
+    public static void anAlwaysActiveBlockEmitsAgainAfterUnloadAndReload(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        ChunkPos chunkPos = new ChunkPos(98_500, 98_000);
+        BlockPos block = new BlockPos(chunkPos.getMinBlockX() + 3, 64, chunkPos.getMinBlockZ() + 3);
+        level.setChunkForced(chunkPos.x, chunkPos.z, true);
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertTrue(level.shouldTickBlocksAt(block), "chunk loaded and ticking"))
+                .thenExecute(() -> {
+                    level.setBlock(block, glowstone(), 3);
+                    helper.assertTrue(ENGINE.isTracked(level, block), "tracked while loaded");
+                    level.setChunkForced(chunkPos.x, chunkPos.z, false);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z) == null, "chunk unloaded"))
+                .thenWaitUntil(() -> helper.assertTrue(!ENGINE.isTracked(level, block), "ChunkEvent.Unload dropped the positions"))
+                .thenExecute(() -> level.setChunkForced(chunkPos.x, chunkPos.z, true))
+                .thenWaitUntil(() -> helper.assertTrue(level.shouldTickBlocksAt(block), "chunk reloaded and ticking"))
+                .thenExecute(() -> {
+                    try {
+                        helper.assertTrue(ENGINE.isTracked(level, block), "the chunk-load scan found the saved block");
+                        reset(level, chunkOf(block));
+                        double grossBefore = gross(server);
+                        interval(server);
+                        helper.assertTrue(gross(server) == grossBefore + GLOW_RATE, "and it emits again");
+                    } finally {
+                        level.setBlock(block, Blocks.AIR.defaultBlockState(), 3);
+                        level.setChunkForced(chunkPos.x, chunkPos.z, false);
+                    }
+                })
+                .thenSucceed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void aChunkOverTheCapTracksTheLowestPositionsAndEmitsForThemOnly(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        DimensionPollution dimension = reset(level, chunkOf(base), ChunkKey.pack((base.getX() >> 4) + 1, base.getZ() >> 4));
+        List<BlockPos> twelve = row(base, 12, 5);
+        List<BlockPos> four = row(base.offset(16, 0, 0), 4, 3);
+        List<String> log = new ArrayList<>();
+        EmitterEngine engine = capEngine(log);
+        helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 8).isEmpty(), "override accepted");
+        try {
+            placeAll(level, twelve, glowstone());
+            placeAll(level, four, glowstone());
+            engine.onChunkLoad(level, level.getChunkAt(base));
+            engine.onChunkLoad(level, level.getChunkAt(four.get(0)));
+
+            long[] tracked = engine.trackedIn(level, chunkOf(base));
+            helper.assertTrue(java.util.Arrays.equals(tracked, lowest(twelve, 8)), "the 8 lowest positions, got " + describe(tracked));
+            helper.assertTrue(java.util.Arrays.equals(engine.trackedIn(level, chunkOf(four.get(0))), lowest(four, 4)), "the second chunk is unaffected");
+
+            engine.tick(level, true);
+
+            helper.assertTrue(dimension.pendingEmission(chunkOf(base)) == 8 * GLOW_RATE, "8 x 0.25, got " + dimension.pendingEmission(chunkOf(base)));
+            helper.assertTrue(dimension.pendingEmission(chunkOf(four.get(0))) == 4 * GLOW_RATE, "4 x 0.25 in the other chunk");
+            helper.assertTrue(log.size() == 1 && log.get(0).contains((base.getX() >> 4) + ", " + (base.getZ() >> 4)), "exactly one line, naming the chunk: " + log);
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+            placeAll(level, four, Blocks.AIR.defaultBlockState());
+            dimension.scheduler().abandon();
+            PollutionManager.stepNow(level, 1);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void everyDiscoveryPathKeepsTheSameLowestPositionsWhateverTheOrder(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        reset(level, chunkOf(base));
+        List<BlockPos> twelve = row(base, 12, 5);
+        List<BlockPos> reversed = new ArrayList<>(twelve);
+        java.util.Collections.reverse(reversed);
+        List<BlockPos> shuffled = new ArrayList<>(twelve);
+        java.util.Collections.shuffle(shuffled, new java.util.Random(7));
+        helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 8).isEmpty(), "override accepted");
+        try {
+            long[] expected = lowest(twelve, 8);
+            for (List<BlockPos> order : List.of(twelve, reversed, shuffled)) {
+                placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+                EmitterEngine byEvents = capEngine(new ArrayList<>());
+                byEvents.onChunkLoad(level, level.getChunkAt(base)); // loaded while empty, then built up by placements
+                for (BlockPos pos : order) {
+                    level.setBlock(pos, glowstone(), 2 | 16);
+                    byEvents.onBlockChanged(level, pos, glowstone());
+                }
+                long[] viaEvents = byEvents.trackedIn(level, chunkOf(base));
+                helper.assertTrue(java.util.Arrays.equals(viaEvents, expected), "placement events starting at x=" + order.get(0).getX() + ": " + describe(viaEvents));
+            }
+            EmitterEngine byScan = capEngine(new ArrayList<>());
+            byScan.onChunkLoad(level, level.getChunkAt(base));
+            helper.assertTrue(java.util.Arrays.equals(byScan.trackedIn(level, chunkOf(base)), expected), "the chunk-load scan agrees");
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void aBlockRankingInsideTheCapEntersAndTheBoundaryOneLeaves(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        reset(level, chunkOf(base));
+        List<BlockPos> twelve = row(base, 12, 5);
+        List<String> log = new ArrayList<>();
+        EmitterEngine engine = capEngine(log);
+        helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 8).isEmpty(), "override accepted");
+        BlockPos inside = new BlockPos(twelve.get(3).getX(), twelve.get(3).getY(), twelve.get(3).getZ() - 4); // same x as the 4th, lower z: ranks below it
+        BlockPos outside = new BlockPos(twelve.get(11).getX(), twelve.get(11).getY(), twelve.get(11).getZ() + 1);
+        try {
+            placeAll(level, twelve, glowstone());
+            engine.onChunkLoad(level, level.getChunkAt(base));
+            helper.assertTrue(java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(twelve, 8)), "starts with the 8 lowest");
+            int linesAfterScan = log.size();
+
+            level.setBlock(inside, glowstone(), 2 | 16);
+            engine.onBlockChanged(level, inside, glowstone());
+            List<BlockPos> afterInside = new ArrayList<>(twelve);
+            afterInside.add(inside);
+            helper.assertTrue(java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(afterInside, 8)), "the new low block entered");
+            helper.assertTrue(!engine.isTracked(level, twelve.get(7)), "and the boundary block (x=" + twelve.get(7).getX() + ") left");
+
+            level.setBlock(outside, glowstone(), 2 | 16);
+            engine.onBlockChanged(level, outside, glowstone());
+            helper.assertTrue(java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(afterInside, 8)), "a block ranking outside is ignored");
+            helper.assertTrue(log.size() <= linesAfterScan + 1, "events never add a line per placement: " + log.size());
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+            level.setBlock(inside, Blocks.AIR.defaultBlockState(), 2 | 16);
+            level.setBlock(outside, Blocks.AIR.defaultBlockState(), 2 | 16);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void theCapLineIsWrittenOncePerPeriodAndNotPerPlacement(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        reset(level, chunkOf(base));
+        List<BlockPos> twelve = row(base, 12, 5);
+        List<BlockPos> more = row(base, 5, 9);
+        List<String> log = new ArrayList<>();
+        EmitterEngine engine = capEngine(log);
+        helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 8).isEmpty(), "override accepted");
+        try {
+            placeAll(level, twelve, glowstone());
+            engine.onChunkLoad(level, level.getChunkAt(base));
+            helper.assertTrue(log.size() == 1, "the scan wrote the line: " + log);
+
+            placeAll(level, more, glowstone());
+            more.forEach(pos -> engine.onBlockChanged(level, pos, glowstone()));
+            helper.assertTrue(log.size() == 1, "five placements into the full chunk add no line: " + log);
+
+            for (int tick = 0; tick < 1_100; tick++) {
+                engine.tick(level, false);
+            }
+            helper.assertTrue(log.size() == 1, "still inside the period: " + log);
+
+            for (int tick = 0; tick < 200; tick++) {
+                engine.tick(level, false); // crosses the 1,200-tick refill, which rescans the chunk
+            }
+            helper.assertTrue(log.size() == 2, "one more line once the period has passed: " + log);
+            more.forEach(pos -> engine.onBlockChanged(level, pos, glowstone()));
+            helper.assertTrue(log.size() == 2, "and again none per placement: " + log);
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+            placeAll(level, more, Blocks.AIR.defaultBlockState());
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void aRescanLimitedToFewKeptPositionsPerTickResumesInsideASectionAndFindsTheSameSet(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        reset(level, chunkOf(base));
+        List<BlockPos> twelve = row(base, 12, 5);
+        EmitterRules[] current = {EmitterRules.EMPTY};
+        EmitterEngine engine = new EmitterEngine(
+                () -> current[0], (l, k) -> true, () -> 1.0, PollutionManager.api(),
+                () -> PollutionCraftMod.config().maxTrackedPerChunk(), message -> {}, 3);
+        helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 8).isEmpty(), "override accepted");
+        try {
+            engine.onChunkLoad(level, level.getChunkAt(base)); // loaded while the rules were empty: nothing scanned
+            placeAll(level, twelve, glowstone());
+            current[0] = EmitterEngine.currentRules(); // the rules change: the chunk is queued
+
+            int ticks = 0;
+            while (ticks < 200 && !java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(twelve, 8))) {
+                engine.tick(level, false);
+                ticks++;
+            }
+
+            helper.assertTrue(java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(twelve, 8)), "the same 8 lowest after " + ticks + " ticks");
+            helper.assertTrue(ticks >= 3, "with 3 kept positions per tick the walk cannot finish in fewer than 3 ticks, took " + ticks);
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+        }
+        helper.succeed();
+    }
+
+    /** Engine ticks until {@code done} holds, up to the deadline; fails the test and returns -1 if it never does. */
+    private static int ticksUntil(GameTestHelper helper, EmitterEngine engine, ServerLevel level, java.util.function.BooleanSupplier done, String what) {
+        for (int tick = 1; tick <= REPAIR_DEADLINE_TICKS; tick++) {
+            engine.tick(level, false);
+            if (done.getAsBoolean()) {
+                return tick;
+            }
+        }
+        helper.fail(what + " did not converge within " + REPAIR_DEADLINE_TICKS + " engine ticks");
+        return -1;
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void removingATrackedBlockFromACappedChunkIsRepairedWithinTheBound(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        reset(level, chunkOf(base));
+        List<BlockPos> twelve = row(base, 12, 5);
+        EmitterEngine engine = capEngine(new ArrayList<>());
+        helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 8).isEmpty(), "override accepted");
+        try {
+            placeAll(level, twelve, glowstone());
+            engine.onChunkLoad(level, level.getChunkAt(base));
+            for (int settle = 0; settle < 3; settle++) {
+                engine.tick(level, false); // a new engine's first tick rescans every loaded chunk; let that finish
+            }
+            level.setBlock(twelve.get(1), Blocks.AIR.defaultBlockState(), 2 | 16); // a tracked block disappears, no event
+            List<BlockPos> remaining = new ArrayList<>(twelve);
+            remaining.remove(1);
+
+            engine.tick(level, true); // the interval-start read notices it
+            helper.assertTrue(engine.trackedIn(level, chunkOf(base)).length == 7, "transient: one block fewer until the repair");
+
+            int ticks = ticksUntil(helper, engine, level, () -> java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(remaining, 8)), "the repair");
+            helper.assertTrue(ticks > 0, "repaired");
+            System.out.println("INFO 031 repair converged after " + ticks + " engine tick(s) (deadline " + REPAIR_DEADLINE_TICKS + ")");
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE)
+    public static void aChangedCapAppliesAtTheNextScanWithinTheBound(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos base = helper.absolutePos(new BlockPos(1, 2, 1));
+        reset(level, chunkOf(base));
+        List<BlockPos> twelve = row(base, 12, 5);
+        EmitterEngine engine = capEngine(new ArrayList<>());
+        try {
+            placeAll(level, twelve, glowstone());
+            engine.onChunkLoad(level, level.getChunkAt(base));
+            helper.assertTrue(engine.trackedIn(level, chunkOf(base)).length == 12, "default cap tracks all 12");
+
+            helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 4).isEmpty(), "lowered through the tune path");
+            helper.assertTrue(engine.trackedIn(level, chunkOf(base)).length == 12, "the larger set stays until the next scan");
+            int lowered = ticksUntil(helper, engine, level, () -> java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(twelve, 4)), "trimming to 4");
+
+            helper.assertTrue(PollutionCraftMod.config().overrides().set(CAP_KEY, 10).isEmpty(), "raised");
+            int raised = ticksUntil(helper, engine, level, () -> java.util.Arrays.equals(engine.trackedIn(level, chunkOf(base)), lowest(twelve, 10)), "admitting up to 10");
+            System.out.println("INFO 031 cap change converged after " + lowered + " tick(s) down and " + raised + " tick(s) up (deadline " + REPAIR_DEADLINE_TICKS + ")");
+        } finally {
+            PollutionCraftMod.config().overrides().clearAll();
+            placeAll(level, twelve, Blocks.AIR.defaultBlockState());
+        }
+        helper.succeed();
+    }
+
     // ---- measurements (plan test 9): reported, not gates ------------------------------------------
 
     @GameTest(template = EMPTY_TEMPLATE, batch = "emitters_measure", timeoutTicks = 1200)
@@ -587,7 +1000,8 @@ public final class EmitterGameTests {
         }
         sliceMicros.sort(Double::compare);
         double sliceMean = sliceMicros.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-        double sliceMax = sliceMicros.isEmpty() ? 0 : sliceMicros.get(sliceMicros.size() - 1);
+        double sliceP99 = percentile(sliceMicros, 0.99);
+        helper.assertTrue(sliceMicros.size() >= 200, "need at least 200 busy rescan ticks for a 99th percentile, got " + sliceMicros.size());
 
         // Neighbour-update handler: a burst of updates at blocks nobody maps, through the real event bus.
         BlockPos probe = busy.getWorldPosition();
@@ -607,7 +1021,7 @@ public final class EmitterGameTests {
         System.out.printf("PERF 011 emission pass @100 emitters: median-of-batch %.1f us/interval = %.5f ms/tick%n", pass100, pass100 / 1000 / 20);
         System.out.printf("PERF 011 emission pass @%d emitters: %.1f us/interval = %.5f ms/tick%n", tracked, pass1000, pass1000 / 1000 / 20);
         System.out.printf("PERF 011 chunk-load scan: plain chunk %.1f us, worst case (mapped block in all %d sections) %.1f us%n", scanPlain, sections, scanWorst);
-        System.out.printf("PERF 011 rescan slice, worst case: mean %.1f us, max %.1f us per tick (%d busy ticks)%n", sliceMean, sliceMax, sliceMicros.size());
+        System.out.printf("PERF 011 rescan slice, worst case: mean %.1f us, p99 %.1f us per tick (%d busy ticks)%n", sliceMean, sliceP99, sliceMicros.size());
         System.out.printf("PERF 011 NeighborNotifyEvent, non-matching, incl. bus dispatch (event allocated in the loop): %.0f ns/event%n", nsPerEvent);
 
         PollutionManager.dimension(level).scheduler().abandon();
@@ -654,11 +1068,163 @@ public final class EmitterGameTests {
         return batches[batches.length / 2];
     }
 
+    /** The {@code q} quantile of an ascending list (nearest rank). */
+    private static double percentile(List<Double> ascending, double q) {
+        if (ascending.isEmpty()) {
+            return 0;
+        }
+        return ascending.get(Math.min(ascending.size() - 1, (int) Math.ceil(q * ascending.size()) - 1));
+    }
+
     private static double timeMicros(int calls, Runnable work) {
         long begin = System.nanoTime();
         for (int i = 0; i < calls; i++) {
             work.run();
         }
         return (System.nanoTime() - begin) / 1000.0 / calls;
+    }
+
+    // ---- measurements for task 031: reported, with the 99th percentile of the rescan --------------------------------
+
+    private static void fillGlow(ServerLevel level, ChunkPos chunk, int count, int startY, List<BlockPos> placed) {
+        for (int i = 0; i < count; i++) {
+            BlockPos pos = new BlockPos(chunk.getMinBlockX() + i % 16, startY + i / 256, chunk.getMinBlockZ() + (i / 16) % 16);
+            level.setBlock(pos, glowstone(), 2 | 16);
+            placed.add(pos);
+        }
+    }
+
+    /** Rescan slices of {@code chunks} (queued by a rule change, again and again) until at least 300 busy ticks. */
+    private static List<Double> rescanSlices(ServerLevel level, List<ChunkPos> chunks, int offersPerTick) {
+        EmitterRules[] current = {EmitterRules.EMPTY};
+        EmitterEngine viaCurrent = new EmitterEngine(
+                () -> current[0], (l, k) -> true, () -> 1.0, PollutionManager.api(),
+                () -> PollutionCraftMod.config().maxTrackedPerChunk(), message -> {}, offersPerTick);
+        chunks.forEach(c -> viaCurrent.onChunkLoad(level, level.getChunk(c.x, c.z)));
+        List<Double> micros = new ArrayList<>();
+        for (int round = 0; round < 4_000 && micros.size() < 300; round++) {
+            current[0] = EmitterEngine.currentRules();
+            for (int t = 0; t < 600; t++) {
+                long begin = System.nanoTime();
+                viaCurrent.tick(level, false);
+                long took = System.nanoTime() - begin;
+                if (round >= 3 && took > 3000) {
+                    micros.add(took / 1000.0);
+                }
+            }
+            current[0] = EmitterRules.EMPTY;
+            viaCurrent.tick(level, false);
+        }
+        micros.sort(Double::compare);
+        return micros;
+    }
+
+    @GameTest(template = EMPTY_TEMPLATE, batch = "emitters_measure_cap", timeoutTicks = 3000)
+    public static void measureTheTrackedBlockCostAndTheCap(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        ChunkPos one = new ChunkPos(99_300, 99_000);
+        ChunkPos atCap = new ChunkPos(99_310, 99_000);
+        ChunkPos layout = new ChunkPos(99_320, 99_000);
+        ChunkPos plain = new ChunkPos(99_330, 99_000);
+        List<ChunkPos> twenty = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            twenty.add(new ChunkPos(99_400 + 3 * i, 99_100));
+        }
+        List<ChunkPos> all = new ArrayList<>(List.of(one, atCap, layout, plain));
+        all.addAll(twenty);
+        all.forEach(c -> level.setChunkForced(c.x, c.z, true));
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertTrue(level.shouldTickBlocksAt(one.getWorldPosition()) && level.shouldTickBlocksAt(twenty.get(19).getWorldPosition()), "ticking"))
+                .thenExecute(() -> {
+                    List<BlockPos> placed = new ArrayList<>();
+                    try {
+                        measureCap(helper, level, server, one, atCap, layout, plain, twenty, placed);
+                    } finally {
+                        placed.forEach(pos -> level.setBlock(pos, Blocks.AIR.defaultBlockState(), 2 | 16));
+                        PollutionCraftMod.config().overrides().clearAll();
+                        all.forEach(c -> {
+                            ENGINE.onChunkUnload(level, c.toLong());
+                            level.setChunkForced(c.x, c.z, false);
+                        });
+                    }
+                })
+                .thenSucceed();
+    }
+
+    private static void measureCap(
+            GameTestHelper helper, ServerLevel level, MinecraftServer server, ChunkPos one, ChunkPos atCap, ChunkPos layout, ChunkPos plain,
+            List<ChunkPos> twenty, List<BlockPos> placed) {
+        DimensionPollution dimension = reset(level, ChunkKey.pack(one.x, one.z));
+        List<Long> seeded = new ArrayList<>();
+        for (int i = 0; i < 2500; i++) {
+            long key = ChunkKey.pack(200_000 + i % 50, 200_000 + i / 50);
+            dimension.field().getOrCreate(key).absorbable = 20 + i % 97;
+            seeded.add(key);
+        }
+        totalMsPerTick(server, 10); // warm-up
+        double baseline = totalMsPerTick(server, 20);
+        LevelChunk plainChunk = level.getChunk(plain.x, plain.z);
+        EmitterEngine scanner = capEngine(new ArrayList<>());
+        double scanPlain = timeMicros(2_000, () -> scanner.onChunkLoad(level, plainChunk));
+
+        record Scenario(String name, List<ChunkPos> chunks, int blocksPerChunk, int startY) {}
+        List<Scenario> scenarios = List.of(
+                new Scenario("300 in one chunk", List.of(one), 300, 64),
+                new Scenario("one chunk at the default cap (2,304 placed, 2,048 kept)", List.of(atCap), 2_304, 64),
+                new Scenario("300 in each of 20 chunks (6,000)", twenty, 300, 64),
+                new Scenario("unfavourable layout: every cell of 8 sections (32,768 placed)", List.of(layout), 32_768, 0));
+        double perEmitterMicros = 0;
+        for (Scenario scenario : scenarios) {
+            for (ChunkPos c : scenario.chunks()) {
+                fillGlow(level, c, scenario.blocksPerChunk(), scenario.startY(), placed);
+            }
+            EmitterEngine pass = capEngine(new ArrayList<>());
+            for (ChunkPos c : scenario.chunks()) {
+                pass.onChunkLoad(level, level.getChunk(c.x, c.z));
+                ENGINE.onChunkUnload(level, c.toLong());
+                ENGINE.onChunkLoad(level, level.getChunk(c.x, c.z));
+            }
+            int tracked = pass.trackedCount(level);
+            double passMicros = passMicros(pass, level, scenario.chunks().size() > 1 ? 400 : 1_500);
+            LevelChunk first = level.getChunk(scenario.chunks().get(0).x, scenario.chunks().get(0).z);
+            double scan = timeMicros(scenario.blocksPerChunk() > 5_000 ? 60 : 300, () -> scanner.onChunkLoad(level, first));
+            List<Double> slices = rescanSlices(level, scenario.chunks(), EmitterEngine.RESCAN_OFFERS_PER_TICK);
+            List<Double> unlimited = rescanSlices(level, scenario.chunks(), Integer.MAX_VALUE);
+            System.out.printf("PERF 031 [%s] rescan slice WITHOUT the %d-offer limit: mean %.1f us, p99 %.1f us over %d busy ticks%n",
+                    scenario.name(), EmitterEngine.RESCAN_OFFERS_PER_TICK, unlimited.stream().mapToDouble(Double::doubleValue).average().orElse(0),
+                    percentile(unlimited, 0.99), unlimited.size());
+            double mean = slices.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+            double total = totalMsPerTick(server, 20);
+            double perEmitter = passMicros / tracked;
+            if (scenario.chunks().size() == 20) {
+                perEmitterMicros = perEmitter;
+            }
+            System.out.printf("PERF 031 [%s]: tracked %d; emission pass %.1f us/interval = %.5f ms/tick (%.3f us per tracked block); "
+                            + "chunk-load scan %.1f us (a plain chunk: %.1f us); rescan slice mean %.1f us, p99 %.1f us over %d busy ticks; "
+                            + "total %.4f ms/tick (diffusion alone %.4f)%n",
+                    scenario.name(), tracked, passMicros, passMicros / 1000 / 20, perEmitter, scan, scanPlain, mean, percentile(slices, 0.99),
+                    slices.size(), total, baseline);
+            helper.assertTrue(slices.size() >= 200, scenario.name() + ": need at least 200 busy rescan ticks, got " + slices.size());
+            placed.forEach(pos -> level.setBlock(pos, Blocks.AIR.defaultBlockState(), 2 | 16));
+            placed.clear();
+            for (ChunkPos c : scenario.chunks()) {
+                ENGINE.onChunkUnload(level, c.toLong());
+                ENGINE.onChunkLoad(level, level.getChunk(c.x, c.z));
+            }
+            dimension.scheduler().abandon();
+            PollutionManager.stepNow(level, 1);
+        }
+        double budget = 0.5;
+        System.out.printf("PERF 031 break-even: at %.3f us per tracked block and %.4f ms/tick for diffusion, the whole %.1f ms/tick budget is used by about %.0f active tracked blocks%n",
+                perEmitterMicros, baseline, budget, (budget - baseline) * 20 * 1000 / perEmitterMicros);
+        seeded.forEach(dimension.field()::remove);
+        for (int x = 199_999; x <= 200_050; x++) {
+            for (int z = 199_999; z <= 200_050; z++) {
+                dimension.field().remove(ChunkKey.pack(x, z));
+            }
+        }
+        dimension.scheduler().abandon();
+        PollutionManager.stepNow(level, 1);
     }
 }

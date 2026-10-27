@@ -31,9 +31,15 @@ public final class EmitterRules {
     /** A validated entry and the id of the file it came from. */
     public record NamedEntry(String id, MappingEntry entry) {}
 
+    /** {@code property} is null for an always-active rule, which matches every state of its block. */
     private record Rule(String id, Property<?> property, Comparable<?> value, double rate) {
         boolean matches(BlockState state) {
-            return state.getValue(property).equals(value);
+            return property == null || state.getValue(property).equals(value);
+        }
+
+        /** Whether some state can satisfy both rules. */
+        boolean overlaps(Rule other) {
+            return property == null || other.property == null || !property.equals(other.property) || value.equals(other.value);
         }
     }
 
@@ -59,29 +65,14 @@ public final class EmitterRules {
             List<Block> targets = targetsOf(named, blocks, log);
             int lacking = 0;
             for (Block block : targets) {
-                Property<?> property = block.getStateDefinition().getProperty(entry.property());
-                if (property == null) {
+                Rule rule = ruleFor(named, block, log);
+                if (rule == null) {
                     lacking++;
-                    if (entry.kind() == MappingEntry.TargetKind.BLOCK) {
-                        log.accept("Skipping emitter mapping " + named.id() + ": block " + entry.target() + " has no property '"
-                                + entry.property() + "'");
-                    }
-                    continue;
-                }
-                Comparable<?> value = property.getValue(entry.value()).orElse(null);
-                if (value == null) {
-                    lacking++;
-                    if (entry.kind() == MappingEntry.TargetKind.BLOCK) {
-                        log.accept("Skipping emitter mapping " + named.id() + ": property '" + entry.property() + "' of "
-                                + entry.target() + " cannot be '" + entry.value() + "'");
-                    }
                     continue;
                 }
                 List<Rule> rules = building.computeIfAbsent(block, key -> new ArrayList<>());
-                Rule rule = new Rule(named.id(), property, value, entry.rate());
                 for (Rule earlier : rules) {
-                    boolean overlap = !earlier.property().equals(property) || earlier.value().equals(value);
-                    if (overlap && warnedConflicts.add(earlier.id() + "|" + rule.id())) {
+                    if (earlier.overlaps(rule) && warnedConflicts.add(earlier.id() + "|" + rule.id())) {
                         log.accept("Emitter mappings " + earlier.id() + " and " + rule.id() + " can both apply to the same state of "
                                 + "a block; " + earlier.id() + " wins (lowest id)");
                     }
@@ -90,12 +81,37 @@ public final class EmitterRules {
             }
             if (lacking > 0 && entry.kind() == MappingEntry.TargetKind.TAG) {
                 log.accept("Emitter mapping " + named.id() + ": " + lacking + " block(s) of tag " + entry.target()
-                        + " lack property '" + entry.property() + "' or its value '" + entry.value() + "'; those were skipped");
+                        + " lack property '" + entry.activeWhen().property() + "' or its value '" + entry.activeWhen().value() + "'; those were skipped");
             }
         }
         Reference2ObjectOpenHashMap<Block, Rule[]> frozen = new Reference2ObjectOpenHashMap<>();
         building.forEach((block, rules) -> frozen.put(block, rules.toArray(NO_RULES)));
         return new EmitterRules(frozen);
+    }
+
+    /** The rule for one block, or null (after logging for a block target) if the block lacks the property or value. */
+    private static Rule ruleFor(NamedEntry named, Block block, Consumer<String> log) {
+        MappingEntry entry = named.entry();
+        if (entry.isAlwaysActive()) {
+            return new Rule(named.id(), null, null, entry.rate());
+        }
+        MappingEntry.ActiveWhen when = entry.activeWhen();
+        Property<?> property = block.getStateDefinition().getProperty(when.property());
+        if (property == null) {
+            if (entry.kind() == MappingEntry.TargetKind.BLOCK) {
+                log.accept("Skipping emitter mapping " + named.id() + ": block " + entry.target() + " has no property '" + when.property() + "'");
+            }
+            return null;
+        }
+        Comparable<?> value = property.getValue(when.value()).orElse(null);
+        if (value == null) {
+            if (entry.kind() == MappingEntry.TargetKind.BLOCK) {
+                log.accept("Skipping emitter mapping " + named.id() + ": property '" + when.property() + "' of " + entry.target()
+                        + " cannot be '" + when.value() + "'");
+            }
+            return null;
+        }
+        return new Rule(named.id(), property, value, entry.rate());
     }
 
     private static List<Block> targetsOf(NamedEntry named, Registry<Block> blocks, Consumer<String> log) {
