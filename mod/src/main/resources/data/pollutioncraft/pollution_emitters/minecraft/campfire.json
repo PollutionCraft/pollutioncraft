@@ -1,0 +1,5 @@
+{
+  "block": "minecraft:campfire",
+  "rate": 0.25,
+  "active_when": { "property": "lit", "value": "true" }
+}

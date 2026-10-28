@@ -59,3 +59,20 @@ nothing**. Their pollution is not merged into the others.
 - This is a different limit from `maxEmittersPerChunk`, which caps the positions the pollution buffer attributes.
   If you set `maxTrackedPerChunk` above `maxEmittersPerChunk`, the extra blocks still emit and still count; they are
   only not named as the dominant source.
+
+## Shipped mappings
+
+The mod ships these seven files under `data/pollutioncraft/pollution_emitters/minecraft/`. The **rates are placeholders
+for the playtest**, not final numbers; change one by replacing its file in a datapack.
+
+| File | Rule | Rate (PU per interval) |
+|---|---|---|
+| `furnace.json` | active while `lit=true` | 1.0 |
+| `blast_furnace.json` | active while `lit=true` (burns fuel twice as fast as a furnace) | 2.0 |
+| `smoker.json` | active while `lit=true` (burns fuel twice as fast as a furnace) | 2.0 |
+| `campfire.json` | active while `lit=true` (a campfire that is put out emits nothing) | 0.25 |
+| `torch.json` | always active | 0.01 |
+| `wall_torch.json` | always active | 0.01 |
+| `lantern.json` | always active | 0.01 |
+
+Soul campfires, soul torches, soul lanterns, candles, jack o'lanterns, lava and fire are deliberately not mapped.

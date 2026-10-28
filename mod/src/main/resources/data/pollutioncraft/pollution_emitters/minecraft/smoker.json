@@ -1,0 +1,5 @@
+{
+  "block": "minecraft:smoker",
+  "rate": 2.0,
+  "active_when": { "property": "lit", "value": "true" }
+}

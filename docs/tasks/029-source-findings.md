@@ -1,0 +1,15 @@
+# 029 source findings (Heimdall): activity state of each vanilla block
+
+Read on 2026-10-27 in the NeoForge 21.1.264 patched sources: the NeoForm cache zip `sourcesWithNeoForge_2708be5f…_output.zip`, built from `neoforge-21.1.264-sources.jar`. These were read, not run. The GameTests in 029 are the runtime proof.
+
+| Block id | Class | Activity state | Who sets it, and the flag | Finding |
+|---|---|---|---|---|
+| `minecraft:blast_furnace` | `BlastFurnaceBlock extends AbstractFurnaceBlock` | `lit` (`AbstractFurnaceBlock.LIT = BlockStateProperties.LIT`, registered in `createBlockStateDefinition`: `builder.add(FACING, LIT)`, default `false`) | `AbstractFurnaceBlockEntity.serverTick`: `state.setValue(LIT, isLit())`, `level.setBlock(pos, state, 3)` (as for the furnace, task 011) | **`lit=true` usable.** **The rate assumption is refuted:** `BlastFurnaceBlockEntity.getBurnDuration(fuel)` returns `super.getBurnDuration(fuel) / 2`. A lit blast furnace consumes fuel **twice as fast** as a furnace (`litTime--` once per tick, from half the duration). |
+| `minecraft:smoker` | `SmokerBlock extends AbstractFurnaceBlock` | `lit`, as above | as above | **`lit=true` usable.** Same refutation: `SmokerBlockEntity.getBurnDuration` is also `/ 2`. |
+| `minecraft:campfire` | `CampfireBlock` (`spawnParticles = true`) | `lit` (`builder.add(LIT, SIGNAL_FIRE, WATERLOGGED, FACING)`, default `true`) | Placement: `lit = !waterlogged` (`getStateForPlacement`). **Put out:** water (`placeLiquid`: `setValue(WATERLOGGED, true).setValue(LIT, false)`, flag 3), a shovel (`ShovelItem.useOn` via NeoForge `ItemAbilities.SHOVEL_DOUSE`, flag 11), and `dowse`. **Relit:** a burning projectile (`onProjectileHit`, flag 11), flint and steel or a fire charge (`canLight`). | **`lit=true` usable.** The sources disagree with the user's "it never goes out": a campfire **can** be put out and relit. It burns no fuel and stays lit indefinitely unless put out. Mapping it with `active_when lit=true` makes an unlit campfire emit nothing, as the plan expected. **Tell the user.** |
+| `minecraft:torch` | `TorchBlock extends BaseTorchBlock` | none (no `createBlockStateDefinition` override) | — | Always active (no `active_when`), as planned. |
+| `minecraft:wall_torch` | `WallTorchBlock extends TorchBlock` | only `FACING` | — | Always active; a **separate block id** from `torch`, so it needs its own file, as planned. |
+| `minecraft:lantern` | `LanternBlock` | `HANGING`, `WATERLOGGED`; no `lit` | — | Always active, as planned. A waterlogged lantern still counts. Vanilla shows it lit; noted for the user, not a change. |
+| `minecraft:soul_campfire`, `soul_torch`, `soul_wall_torch`, `soul_lantern` | same classes | same states | — | Separate block ids, so they are excluded simply by not being mapped (user decision). |
+
+**Rate decision (user, 2026-10-27):** pollution follows the fuel burn rate. The blast furnace and the smoker burn fuel twice as fast as a furnace, so they ship at **2.0 PU per interval** while lit. The furnace stays 1.0 and the campfire 0.25. The plan's original 1.0 rested on "burns fuel per tick at the same speed", which the sources refute.
