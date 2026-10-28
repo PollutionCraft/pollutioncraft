@@ -22,27 +22,38 @@ public final class MappingValidator {
             log.accept("Skipping emitter mapping " + fileId + ": " + problem);
             return Optional.empty();
         }
-        boolean isBlock = raw.containsKey("block");
+        MappingEntry.TargetKind kind = raw.containsKey("block")
+                ? MappingEntry.TargetKind.BLOCK
+                : raw.containsKey("tag") ? MappingEntry.TargetKind.TAG : MappingEntry.TargetKind.ENTITY;
         MappingEntry.ActiveWhen activeWhen = raw.containsKey("active_when")
                 ? new MappingEntry.ActiveWhen(
                         (String) ((Map<?, ?>) raw.get("active_when")).get("property"),
                         (String) ((Map<?, ?>) raw.get("active_when")).get("value"))
                 : null;
         return Optional.of(new MappingEntry(
-                isBlock ? MappingEntry.TargetKind.BLOCK : MappingEntry.TargetKind.TAG,
-                (String) raw.get(isBlock ? "block" : "tag"),
+                kind,
+                (String) raw.get(targetKey(kind)),
                 ((Number) raw.get("rate")).doubleValue(),
                 activeWhen));
     }
 
+    private static String targetKey(MappingEntry.TargetKind kind) {
+        return switch (kind) {
+            case BLOCK -> "block";
+            case TAG -> "tag";
+            case ENTITY -> "entity";
+        };
+    }
+
     /** The first thing wrong with the entry, or {@code null} if it is valid. */
     private static String problemWith(Map<String, ?> raw) {
-        boolean hasBlock = raw.containsKey("block");
-        boolean hasTag = raw.containsKey("tag");
-        if (hasBlock == hasTag) {
-            return hasBlock ? "has both 'block' and 'tag'; exactly one is allowed" : "needs exactly one of 'block' or 'tag'";
+        int targets = (raw.containsKey("block") ? 1 : 0) + (raw.containsKey("tag") ? 1 : 0) + (raw.containsKey("entity") ? 1 : 0);
+        if (targets != 1) {
+            return targets == 0
+                    ? "needs exactly one of 'block', 'tag' or 'entity'"
+                    : "has more than one of 'block', 'tag' and 'entity'; exactly one is allowed";
         }
-        String targetKey = hasBlock ? "block" : "tag";
+        String targetKey = raw.containsKey("block") ? "block" : raw.containsKey("tag") ? "tag" : "entity";
         if (!(raw.get(targetKey) instanceof String id) || id.isBlank()) {
             return "'" + targetKey + "' must be a non-empty string";
         }
@@ -52,6 +63,9 @@ public final class MappingValidator {
         double value = rate.doubleValue();
         if (Double.isNaN(value) || Double.isInfinite(value) || value < 0) {
             return "'rate' must be finite and >= 0, was " + value;
+        }
+        if (targetKey.equals("entity") && raw.containsKey("active_when")) {
+            return "an 'entity' mapping has no 'active_when'; the activity test of each supported entity is built in";
         }
         // No active_when means always active. One that is present must be complete: the mod does not guess.
         if (!raw.containsKey("active_when")) {

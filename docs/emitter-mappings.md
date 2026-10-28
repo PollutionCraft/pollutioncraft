@@ -1,7 +1,7 @@
 # Emitter mappings
 
-Each `*.json` file in `data/<any namespace>/pollution_emitters/` maps one block (or block tag) to a pollution
-rate. The shipped mappings live under `data/pollutioncraft/pollution_emitters/<target mod id>/`; the folder
+Each `*.json` file in `data/<any namespace>/pollution_emitters/` maps one block (or block tag), or one entity type, to a
+pollution rate. The shipped mappings live under `data/pollutioncraft/pollution_emitters/<target mod id>/`; the folder
 after `pollution_emitters/` names the mod the blocks belong to (`minecraft` here).
 
 ```json
@@ -33,6 +33,40 @@ emits its `rate` every interval for as long as it stands in a loaded chunk where
 - A datapack overrides a rate by replacing the file with the same path. Mappings load on server start and on `/reload`.
 - Without any mapping file the mod loads and emits nothing.
 
+## Entities: the furnace minecart
+
+An entity that works can pollute too. Entity mappings use an `entity` key instead of `block` or `tag`, and have **no
+`active_when`**: what counts as "working" is built in for each supported entity type, because an entity has no block
+state for the mod to check at load time.
+
+```json
+{ "entity": "minecraft:furnace_minecart", "rate": 0.45 }
+```
+
+| Entity type | Active while | Shipped rate |
+|---|---|---|
+| `minecraft:furnace_minecart` | it has fuel (the same flag that makes its smoke and its furnace face light up) | 0.45 PU per interval |
+
+- A furnace minecart without fuel emits nothing. A cart with fuel emits once per interval, into the chunk it stands in
+  when the interval starts. A cart that crosses a chunk border is counted once, in whichever chunk it is in at that moment.
+- Only entities that are ticking emit: a cart in an unloaded chunk, or in a loaded chunk where entities do not tick yet,
+  emits nothing (it does not burn fuel there either). It resumes when the chunk is ticking again.
+- A cart that is removed, or that travels to another dimension, stops emitting in the old one at once; in the new
+  dimension it emits there.
+- The rate follows fuel burn: a coal burns 3,600 ticks in a cart, so 0.45 PU per interval is about 81 PU per coal, as
+  much as in a furnace (1 PU per interval for 1,600 ticks). Like every rate it is a placeholder for the playtest.
+- The `emissionMultiplier` scales it. A datapack changes the rate by replacing the file; the change applies at the next
+  interval. Mapping any other entity type is refused with one log line ("has no built-in activity test").
+- An `entity` entry together with `block` or `tag`, or with `active_when`, is invalid and skipped like any other.
+
+### Known limitation: at most 1,024 carts per dimension
+
+The mod reads at most **1,024** furnace minecarts per dimension per interval (a fixed bound, not a config value). With
+more loaded at once, the carts with the **lowest UUIDs** emit and the rest emit nothing; their pollution is not merged
+into the others. The same carts emit after a restart. One warning per dimension per minute (about 1,200 ticks) is written
+to the server log while the bound is exceeded. The bound keeps the work on the one tick per interval that reads the carts
+to about a millisecond.
+
 ## The cap on tracked blocks per chunk
 
 The engine remembers where the mapped blocks are, and once per interval it reads each one. To keep that cost and
@@ -62,7 +96,7 @@ nothing**. Their pollution is not merged into the others.
 
 ## Shipped mappings
 
-The mod ships these seven files under `data/pollutioncraft/pollution_emitters/minecraft/`. The **rates are placeholders
+The mod ships these eight files under `data/pollutioncraft/pollution_emitters/minecraft/`. The **rates are placeholders
 for the playtest**, not final numbers; change one by replacing its file in a datapack.
 
 | File | Rule | Rate (PU per interval) |
@@ -74,5 +108,6 @@ for the playtest**, not final numbers; change one by replacing its file in a dat
 | `torch.json` | always active | 0.01 |
 | `wall_torch.json` | always active | 0.01 |
 | `lantern.json` | always active | 0.01 |
+| `furnace_minecart.json` | entity: active while the cart has fuel (see above) | 0.45 |
 
 Soul campfires, soul torches, soul lanterns, candles, jack o'lanterns, lava and fire are deliberately not mapped.

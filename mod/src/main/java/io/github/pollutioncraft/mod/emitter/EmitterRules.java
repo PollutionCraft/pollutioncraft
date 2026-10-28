@@ -1,18 +1,22 @@
 package io.github.pollutioncraft.mod.emitter;
 
+import it.unimi.dsi.fastutil.objects.Reference2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
@@ -26,7 +30,7 @@ import net.minecraft.world.level.block.state.properties.Property;
  * tag counts as an empty tag.
  */
 public final class EmitterRules {
-    public static final EmitterRules EMPTY = new EmitterRules(new Reference2ObjectOpenHashMap<>());
+    public static final EmitterRules EMPTY = new EmitterRules(new Reference2ObjectOpenHashMap<>(), new Reference2DoubleOpenHashMap<>());
 
     /** A validated entry and the id of the file it came from. */
     public record NamedEntry(String id, MappingEntry entry) {}
@@ -46,9 +50,12 @@ public final class EmitterRules {
     private static final Rule[] NO_RULES = new Rule[0];
 
     private final Reference2ObjectOpenHashMap<Block, Rule[]> byBlock;
+    private final Reference2DoubleOpenHashMap<EntityType<?>> entityRates;
 
-    private EmitterRules(Reference2ObjectOpenHashMap<Block, Rule[]> byBlock) {
+    private EmitterRules(Reference2ObjectOpenHashMap<Block, Rule[]> byBlock, Reference2DoubleOpenHashMap<EntityType<?>> entityRates) {
         this.byBlock = byBlock;
+        this.entityRates = entityRates;
+        entityRates.defaultReturnValue(-1);
     }
 
     /**
@@ -56,12 +63,23 @@ public final class EmitterRules {
      * with the lowest id wins and one warning names both.
      */
     public static EmitterRules resolve(List<NamedEntry> entries, Registry<Block> blocks, Consumer<String> log) {
+        return resolve(entries, blocks, BuiltInRegistries.ENTITY_TYPE, log);
+    }
+
+    /** As above, with the entity registry the {@code entity} entries are judged against. */
+    public static EmitterRules resolve(List<NamedEntry> entries, Registry<Block> blocks, Registry<EntityType<?>> entityTypes, Consumer<String> log) {
+        Reference2DoubleOpenHashMap<EntityType<?>> entityRates = new Reference2DoubleOpenHashMap<>();
+        Map<EntityType<?>, String> entityOwner = new java.util.HashMap<>();
         List<NamedEntry> sorted = new ArrayList<>(entries);
         sorted.sort(Comparator.comparing(NamedEntry::id));
         Reference2ObjectOpenHashMap<Block, List<Rule>> building = new Reference2ObjectOpenHashMap<>();
         Set<String> warnedConflicts = new HashSet<>();
         for (NamedEntry named : sorted) {
             MappingEntry entry = named.entry();
+            if (entry.kind() == MappingEntry.TargetKind.ENTITY) {
+                resolveEntity(named, entityTypes, entityRates, entityOwner, log);
+                continue;
+            }
             List<Block> targets = targetsOf(named, blocks, log);
             int lacking = 0;
             for (Block block : targets) {
@@ -86,7 +104,35 @@ public final class EmitterRules {
         }
         Reference2ObjectOpenHashMap<Block, Rule[]> frozen = new Reference2ObjectOpenHashMap<>();
         building.forEach((block, rules) -> frozen.put(block, rules.toArray(NO_RULES)));
-        return new EmitterRules(frozen);
+        return new EmitterRules(frozen, entityRates);
+    }
+
+    /** Adds one entity entry: the type must exist and have a built-in activity test; the lowest id wins a duplicate. */
+    private static void resolveEntity(
+            NamedEntry named,
+            Registry<EntityType<?>> entityTypes,
+            Reference2DoubleOpenHashMap<EntityType<?>> rates,
+            Map<EntityType<?>, String> owner,
+            Consumer<String> log) {
+        MappingEntry entry = named.entry();
+        ResourceLocation id = ResourceLocation.tryParse(entry.target());
+        if (id == null || !entityTypes.containsKey(id)) {
+            log.accept("Skipping emitter mapping " + named.id() + ": unknown entity type '" + entry.target() + "'");
+            return;
+        }
+        EntityType<?> type = entityTypes.get(id);
+        if (!EntityActivity.isSupported(type)) {
+            log.accept("Skipping emitter mapping " + named.id() + ": entity type '" + entry.target()
+                    + "' has no built-in activity test (only the furnace minecart is supported)");
+            return;
+        }
+        if (owner.containsKey(type)) {
+            log.accept("Emitter mappings " + owner.get(type) + " and " + named.id() + " both map entity type " + entry.target()
+                    + "; " + owner.get(type) + " wins (lowest id)");
+            return;
+        }
+        owner.put(type, named.id());
+        rates.put(type, entry.rate());
     }
 
     /** The rule for one block, or null (after logging for a block target) if the block lacks the property or value. */
@@ -152,6 +198,16 @@ public final class EmitterRules {
             }
         }
         return -1;
+    }
+
+    /** The rate (PU per interval) mapped to this entity type while it is active, or {@code -1} if it has no mapping. */
+    public double entityRate(EntityType<?> type) {
+        return entityRates.getDouble(type);
+    }
+
+    /** Whether any entity type is mapped. */
+    public boolean hasEntityRules() {
+        return !entityRates.isEmpty();
     }
 
     /** Number of distinct mapped blocks. */

@@ -7,8 +7,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.entity.Entity;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
+import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
@@ -77,6 +81,36 @@ public final class EmitterEvents {
             ENGINE.onBlockChanged(level, pos, state);
         } else {
             level.getServer().execute(() -> ENGINE.onBlockChanged(level, pos, state));
+        }
+    }
+
+    /**
+     * Lowest priority, and cancelled joins are not received, so an entity another handler vetoes is never tracked.
+     * Only a reference is stored: the event may fire before the chunk is full, so the world is not touched.
+     */
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    static void onEntityJoin(EntityJoinLevelEvent event) {
+        if (!(event.getLevel() instanceof ServerLevel level) || !EntityActivity.isSupported(event.getEntity().getType())) {
+            return;
+        }
+        Entity entity = event.getEntity();
+        if (level.getServer().isSameThread()) {
+            ENGINE.onEntityJoin(level, entity);
+        } else {
+            level.getServer().execute(() -> ENGINE.onEntityJoin(level, entity));
+        }
+    }
+
+    @SubscribeEvent
+    static void onEntityLeave(EntityLeaveLevelEvent event) {
+        if (!(event.getLevel() instanceof ServerLevel level) || !EntityActivity.isSupported(event.getEntity().getType())) {
+            return;
+        }
+        Entity entity = event.getEntity();
+        if (level.getServer().isSameThread()) {
+            ENGINE.onEntityLeave(level, entity);
+        } else {
+            level.getServer().execute(() -> ENGINE.onEntityLeave(level, entity));
         }
     }
 

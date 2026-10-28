@@ -50,6 +50,9 @@ import org.slf4j.LoggerFactory;
  * the next scan. Removing a tracked block from a chunk that is over the cap frees a slot the engine cannot
  * refill alone, so that chunk goes to the front of the rescan queue.
  *
+ * <p>Entities that pollute while working (the furnace minecart) are handled by {@link EntityEmitters}, called from
+ * the same interval-start tick with the same multiplier read.
+ *
  * <p>Only chunks where blocks tick are emitted for. No chunk is ever loaded or generated. Server thread
  * only: the event handlers hand work over to it. No Mixin, no reflection.
  */
@@ -125,6 +128,7 @@ public final class EmitterEngine {
     private final Consumer<String> capLog;
     private final int offersPerTick;
     private final Map<ServerLevel, LevelState> levels = new WeakHashMap<>();
+    private final EntityEmitters entities;
     private final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
     private boolean failureLogged;
 
@@ -161,6 +165,7 @@ public final class EmitterEngine {
         this.api = api;
         this.capSource = capSource;
         this.capLog = capLog;
+        this.entities = new EntityEmitters(api, (level, pos) -> level.isPositionEntityTicking(pos), EntityEmitters.MAX_TRACKED_PER_LEVEL, capLog);
     }
 
     /** An engine that reads the cap from the config and logs to the server log. */
@@ -202,7 +207,9 @@ public final class EmitterEngine {
             }
             rescanSlice(level, state, rules);
             if (intervalStarts) {
+                amounts.startInterval();
                 emitAll(level, state, rules);
+                entities.emitAll(level, rules, amounts::amountFor);
             }
         } catch (RuntimeException e) {
             if (!failureLogged) {
@@ -247,9 +254,24 @@ public final class EmitterEngine {
         }
     }
 
+    /** An entity of a supported type joined {@code level} (spawned or read from a chunk). */
+    public void onEntityJoin(ServerLevel level, net.minecraft.world.entity.Entity entity) {
+        entities.onJoin(level, entity);
+    }
+
+    /** An entity left {@code level} (removed, unloaded, or changed dimension). */
+    public void onEntityLeave(ServerLevel level, net.minecraft.world.entity.Entity entity) {
+        entities.onLeave(level, entity);
+    }
+
+    public int trackedEntityCount(ServerLevel level) {
+        return entities.trackedCount(level);
+    }
+
     /** Forgets everything (server stopped). */
     public void clear() {
         levels.clear();
+        entities.clear();
     }
 
     public boolean isTracked(ServerLevel level, BlockPos pos) {
@@ -301,7 +323,6 @@ public final class EmitterEngine {
     }
 
     private void emitAll(ServerLevel level, LevelState state, EmitterRules rules) {
-        amounts.startInterval();
         var chunks = state.tracked.long2ObjectEntrySet().fastIterator();
         while (chunks.hasNext()) {
             Long2ObjectMap.Entry<ChunkTrack> entry = chunks.next();
