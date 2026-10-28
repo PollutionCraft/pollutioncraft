@@ -127,4 +127,60 @@ class MappingValidatorTest {
         assertEquals(1, log.size(), log::toString);
         assertTrue(log.get(0).contains(FILE), log.get(0));
     }
+
+    private static Map<String, Object> cart() {
+        Map<String, Object> raw = new HashMap<>();
+        raw.put("entity", "minecraft:furnace_minecart");
+        raw.put("rate", 0.45);
+        return raw;
+    }
+
+    @Test
+    void aValidEntityEntryIsAccepted() {
+        MappingEntry entry = validate(cart()).orElseThrow();
+
+        assertEquals(MappingEntry.TargetKind.ENTITY, entry.kind());
+        assertEquals("minecraft:furnace_minecart", entry.target());
+        assertEquals(0.45, entry.rate());
+        assertTrue(entry.isAlwaysActive(), "an entity entry carries no active_when; its activity is built in");
+        assertTrue(log.isEmpty(), log::toString);
+    }
+
+    @Test
+    void anEntityEntryTogetherWithABlockOrTagIsRefused() {
+        Map<String, Object> withBlock = cart();
+        withBlock.put("block", "minecraft:furnace");
+        Map<String, Object> withTag = cart();
+        withTag.put("tag", "minecraft:campfires");
+
+        assertTrue(validate(withBlock).isEmpty());
+        assertTrue(validate(withTag).isEmpty());
+        assertEquals(2, log.size());
+        assertTrue(log.get(0).contains(FILE), log.get(0));
+    }
+
+    @Test
+    void anEntityEntryWithActiveWhenIsRefused() {
+        Map<String, Object> raw = cart();
+        raw.put("active_when", new HashMap<>(Map.of("property", "lit", "value", "true")));
+
+        assertTrue(validate(raw).isEmpty());
+        assertEquals(1, log.size());
+        assertTrue(log.get(0).contains("active_when"), log.get(0));
+    }
+
+    @Test
+    void anEntityEntryNeedsANonBlankIdAndAGoodRate() {
+        Map<String, Object> blank = cart();
+        blank.put("entity", " ");
+        Map<String, Object> negative = cart();
+        negative.put("rate", -1.0);
+        Map<String, Object> missing = cart();
+        missing.remove("rate");
+
+        assertTrue(validate(blank).isEmpty());
+        assertTrue(validate(negative).isEmpty());
+        assertTrue(validate(missing).isEmpty());
+        assertEquals(3, log.size());
+    }
 }
